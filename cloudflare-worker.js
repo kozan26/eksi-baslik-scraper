@@ -171,17 +171,40 @@ export default {
         }
 
         if (allEntries.length === 0) {
+          // Test the first page to see what HTML we're getting
+          let testHtml = ''
+          try {
+            const testUrl = buildPageUrl(normalizeBaseUrl(baseUrl), 1)
+            const testResponse = await fetch(testUrl, {
+              headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+              }
+            })
+            testHtml = await testResponse.text()
+          } catch (e) {
+            // Ignore
+          }
+          
+          const isChallenge = /cloudflare|challenge|checking/i.test(testHtml)
+          const hasEntryIds = /id=["']entry-\d+["']/i.test(testHtml)
+          const hasEntryList = /id=["']entry-item-list["']/i.test(testHtml)
+          
           return new Response(JSON.stringify({
             success: false,
-            error: 'No entries found. This might mean: 1) The topic has no entries, 2) Entry parsing failed, 3) The HTML structure might have changed. Please check Worker logs for details.',
+            error: `No entries found. Debug info: HTML length=${testHtml.length}, isCloudflareChallenge=${isChallenge}, hasEntryIds=${hasEntryIds}, hasEntryList=${hasEntryList}. Please try the /api/test-parse endpoint with your URL to see detailed HTML structure.`,
             debug: {
               url: baseUrl,
               lastPage,
               slug,
-              id
+              id,
+              testPageHtmlLength: testHtml.length,
+              isCloudflareChallenge: isChallenge,
+              hasEntryIds,
+              hasEntryList,
+              testEndpoint: `${new URL(request.url).origin}/api/test-parse?url=${encodeURIComponent(baseUrl)}`
             }
           }), {
-            status: 200, // Change to 200 so frontend can see the error message
+            status: 200,
             headers: {
               ...corsHeaders,
               'Content-Type': 'application/json',
@@ -829,16 +852,32 @@ function parseEntriesFromHTML(html, limit = 50) {
     }
     
     // 2. #entry-item-list .content - Entry list içindeki tüm .content elementleri
-    // Önce entry-item-list container'ını bul
+    // Önce entry-item-list container'ını bul - farklı tag türlerini dene
     let entryListContainer = null
-    const entryListMatch = html.match(/<[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+    
+    // Önce <ul id="entry-item-list"> dene
+    let entryListMatch = html.match(/<ul[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/ul>/i)
     if (entryListMatch) {
       entryListContainer = entryListMatch[1]
-      console.log('Found entry-item-list container')
+      console.log('Found entry-item-list (ul) container')
     } else {
-      // Bulamazsa, tüm HTML'de ara (fallback)
-      entryListContainer = html
-      console.log('entry-item-list not found, searching entire HTML')
+      // <div id="entry-item-list"> dene
+      entryListMatch = html.match(/<div[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/div>/i)
+      if (entryListMatch) {
+        entryListContainer = entryListMatch[1]
+        console.log('Found entry-item-list (div) container')
+      } else {
+        // Herhangi bir tag dene
+        entryListMatch = html.match(/<[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+        if (entryListMatch) {
+          entryListContainer = entryListMatch[1]
+          console.log('Found entry-item-list (any tag) container')
+        } else {
+          // Bulamazsa, tüm HTML'de ara (fallback)
+          entryListContainer = html
+          console.log('entry-item-list not found, searching entire HTML')
+        }
+      }
     }
     
     // Entry-item-list içindeki tüm entry ID'lerini bul ve map'le
