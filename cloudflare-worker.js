@@ -371,8 +371,9 @@ function cleanEntryText(htmlContent) {
 }
 
 /**
- * HTML'den entry'leri parse eder (Python'daki _extract_entries() mantığı)
- * CSS selector: #pinned-entry .content, #entry-item-list .content
+ * HTML'den entry'leri parse eder (Python'daki _extract_entries() mantığını TAM TAKLİT)
+ * Python: soup.select("#pinned-entry .content, #entry-item-list .content")
+ * Her node için: get_text(separator="\n", strip=True), html.unescape, temizleme, append
  */
 function parseEntriesFromHTML(html, limit = 1000) {
   const entries = []
@@ -383,7 +384,10 @@ function parseEntriesFromHTML(html, limit = 1000) {
       return []
     }
     
-    // 1. #pinned-entry .content - Pinned entry içindeki .content
+    // Python mantığı: soup.select("#pinned-entry .content, #entry-item-list .content")
+    // Yani: Önce #pinned-entry içindeki .content'leri, sonra #entry-item-list içindeki .content'leri bul
+    
+    // 1. #pinned-entry .content - Pinned entry içindeki .content elementleri
     const pinnedContainerMatch = html.match(/<[^>]*id=["']pinned-entry["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
     if (pinnedContainerMatch) {
       const pinnedContainer = pinnedContainerMatch[1]
@@ -394,12 +398,12 @@ function parseEntriesFromHTML(html, limit = 1000) {
       while ((pinnedContentMatch = pinnedContentRegex.exec(pinnedContainer)) !== null) {
         const content = cleanEntryText(pinnedContentMatch[1])
         if (content && content.trim().length > 0) {
+          // Python gibi: Sadece content text'ini ekle, entry ID'ye bakma
           entries.push({
             id: 'pinned',
-            order: 0,
+            order: entries.length,
             content,
           })
-          break // Sadece ilk pinned content'i al
         }
       }
     }
@@ -429,82 +433,30 @@ function parseEntriesFromHTML(html, limit = 1000) {
       }
     }
     
-    // Entry-item-list içindeki tüm .content elementlerini bul
-    // Python'daki gibi: TÜM content elementlerini bul, limit olmadan (limit sadece return için)
+    // Python mantığı: entry-item-list içindeki TÜM .content elementlerini bul
+    // Entry ID'ye BAKMA, sadece content text'lerini çıkar (Python gibi)
     const contentRegex = /<[^>]*class=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/gi
-    const foundEntries = []
     let contentMatch
     contentRegex.lastIndex = 0
     
-    let entryOrder = 0
-    // Limit koyma - tüm content elementlerini bul (Python gibi)
+    // Python gibi: Her content elementini sırayla bul ve direkt ekle (duplicate kontrolü YOK)
     while ((contentMatch = contentRegex.exec(entryListContainer)) !== null) {
       const content = cleanEntryText(contentMatch[1])
-      if (!content || content.trim().length < 3) {
-        continue
-      }
       
-      const contentStart = contentMatch.index
-      
-      // Entry ID'yi bul - content'in önündeki en yakın entry-ID'yi bul
-      const beforeContent = entryListContainer.substring(0, contentStart)
-      const entryIdMatch = beforeContent.match(/id=["']entry-(\d+)["'][^>]*/gi)
-      let entryId = null
-      
-      if (entryIdMatch && entryIdMatch.length > 0) {
-        const lastMatch = entryIdMatch[entryIdMatch.length - 1]
-        const idMatch = lastMatch.match(/entry-(\d+)/)
-        if (idMatch) {
-          entryId = idMatch[1]
-        }
-      }
-      
-      // Eğer önünde entry ID bulamazsa, content'ten sonraki ilk entry ID'yi dene
-      if (!entryId) {
-        const afterContent = entryListContainer.substring(contentStart + contentMatch[0].length, contentStart + contentMatch[0].length + 2000)
-        const nextEntryMatch = afterContent.match(/id=["']entry-(\d+)["'][^>]*/i)
-        if (nextEntryMatch) {
-          const idMatch = nextEntryMatch[0].match(/entry-(\d+)/)
-          if (idMatch) {
-            entryId = idMatch[1]
-          }
-        }
-      }
-      
-      // Entry ID bulunamadıysa, order kullan
-      if (!entryId) {
-        entryId = `order-${entryOrder}`
-      }
-            
-            // Duplicate kontrolü - aynı sayfa içinde aynı entry ID'yi skip et
-      const existing = foundEntries.find(e => e.id === entryId)
-      if (!existing) {
-        foundEntries.push({
-          id: entryId,
+      // Python: if txt: out.append(txt)
+      if (content && content.trim().length > 0) {
+        // Python gibi: Direkt ekle, entry ID arama
+        entries.push({
+          id: `entry-${entries.length}`, // Sadece sıra numarası için ID
+          order: entries.length,
           content,
-          position: contentStart
         })
-        entryOrder++
-      } else {
-        // Duplicate entry ID bulundu - bu normal değil ama skip et
-        console.log(`Warning: Duplicate entry ID ${entryId} found on same page, skipping`)
       }
     }
     
-    // Position'a göre sırala (HTML'deki sırayı koru)
-    foundEntries.sort((a, b) => a.position - b.position)
+    console.log(`Parsed ${entries.length} entries from HTML (Python mantığı: sadece content text'leri, duplicate kontrolü yok)`)
     
-    // Order'ı ata ve ekle
-    foundEntries.forEach((entry) => {
-      entries.push({
-        ...entry,
-        order: entries.length
-      })
-    })
-    
-    console.log(`Parsed ${entries.length} entries from HTML (${foundEntries.length} regular entries, ${entries.length - foundEntries.length} pinned)`)
-    
-    // Limit kadar döndür (sadece return için)
+    // Limit kadar döndür
     return entries.slice(0, limit)
     
   } catch (error) {
@@ -660,51 +612,29 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
       
       console.log(`Page ${p}: Parsed ${entries.length} entries from HTML`)
       
-      // Python mantığı: Her sayfadan tüm entry'leri al ve ekle (duplicate kontrolü yap)
-      let addedCount = 0
-      let skippedCount = 0
+      // Python mantığı: all_entries.extend(items) - Direkt ekle, duplicate kontrolü YOK
+      // Çünkü her sayfada farklı entry'ler var, duplicate olmaz
+      const entriesBefore = allEntries.length
       
-      for (const entry of entries) {
-        // Entry ID'si varsa ve daha önce eklenmemişse ekle
-        if (entry.id && entry.id !== 'pinned') {
-          // Pinned entry sadece bir kere eklenmeli (ilk sayfada)
-          if (!entryIdSet.has(entry.id)) {
-            entryIdSet.add(entry.id)
-            // Order'ı yeniden hesapla (toplam entry sayısı)
+      // Pinned entry sadece ilk sayfada olmalı
+      if (p === 1) {
+        // İlk sayfa: Tüm entry'leri ekle (pinned dahil)
+        for (const entry of entries) {
+          entry.order = allEntries.length
+          allEntries.push(entry)
+        }
+      } else {
+        // Diğer sayfalar: Pinned entry'leri atla, sadece normal entry'leri ekle
+        for (const entry of entries) {
+          if (entry.id !== 'pinned') {
             entry.order = allEntries.length
             allEntries.push(entry)
-            addedCount++
-          } else {
-            skippedCount++
-            console.log(`Skipping duplicate entry ID: ${entry.id}`)
-          }
-        } else if (entry.id === 'pinned') {
-          // Pinned entry sadece ilk sayfada ve bir kere eklenmeli
-          if (p === 1 && !entryIdSet.has('pinned')) {
-            entryIdSet.add('pinned')
-            entry.order = allEntries.length
-            allEntries.push(entry)
-            addedCount++
-          } else {
-            skippedCount++
-          }
-        } else {
-          // Entry ID yoksa (order-XXX gibi), content substring kullan
-          const contentPreview = entry.content.substring(0, 50)
-          const contentKey = `content-${p}-${contentPreview.length}-${entry.content.length}`
-          
-          if (!entryIdSet.has(contentKey)) {
-            entryIdSet.add(contentKey)
-            entry.order = allEntries.length
-            allEntries.push(entry)
-            addedCount++
-          } else {
-            skippedCount++
           }
         }
       }
       
-      console.log(`Page ${p}: Added ${addedCount} new entries, skipped ${skippedCount} duplicates, total unique entries: ${allEntries.length}`)
+      const entriesAdded = allEntries.length - entriesBefore
+      console.log(`Page ${p}: Added ${entriesAdded} entries (total: ${allEntries.length})`)
       
       // Python mantığı: Eğer sayfa boşsa (entry yoksa) dur
       if (entries.length === 0 && p > 1) {
