@@ -542,9 +542,11 @@ function maxPFromLinks(baseUrl, html) {
 
 /**
  * Son sayfa sayısını tespit eder (Python'daki _discover_last_page_safely() mantığı)
+ * Subrequest limiti için optimize edilmiş: maksimum 10 subrequest
  */
 async function discoverLastPage(baseUrl) {
   const normalizedBase = normalizeBaseUrl(baseUrl)
+  const MAX_SUBREQUESTS = 8 // Son sayfa tespiti için maksimum subrequest
   
   try {
     // 1. p=1'de link taraması
@@ -554,10 +556,13 @@ async function discoverLastPage(baseUrl) {
     
     // 2. p=2'de link taraması (varsa)
     let m2 = m1
-    if (m1 < 3) {
+    let subrequestsUsed = 1
+    
+    if (m1 < 3 && subrequestsUsed < MAX_SUBREQUESTS) {
       try {
         const page2Url = buildPageUrl(normalizedBase, 2)
         const html2 = await fetchHtml(page2Url)
+        subrequestsUsed++
         m2 = Math.max(m1, maxPFromLinks(normalizedBase, html2))
       } catch (e) {
         // Ignore errors for page 2
@@ -570,14 +575,22 @@ async function discoverLastPage(baseUrl) {
       return candidate
     }
     
-    // 3. Sıralı yüryüş: 3, 4, 5... boş/404 olana kadar
-    const MAX_SEQ_WALK = 100
+    // 3. Sıralı yürüyüş: Kalan subrequest sayısına göre sınırla
+    const remainingRequests = MAX_SUBREQUESTS - subrequestsUsed
+    const MAX_SEQ_WALK = Math.min(remainingRequests, 20) // Maksimum 20 sayfa kontrol et
+    
     let current = Math.max(candidate, 2)
     
     for (let next = current + 1; next <= current + MAX_SEQ_WALK; next++) {
+      if (subrequestsUsed >= MAX_SUBREQUESTS) {
+        console.log(`Subrequest limit reached (${MAX_SUBREQUESTS}), stopping at page ${candidate}`)
+        break
+      }
+      
       try {
         const testUrl = buildPageUrl(normalizedBase, next)
         const testHtml = await fetchHtml(testUrl)
+        subrequestsUsed++
         
         const items = parseEntriesFromHTML(testHtml, 1)
         
@@ -602,16 +615,19 @@ async function discoverLastPage(baseUrl) {
 
 /**
  * Tüm sayfaları çekip entry'leri birleştirir
+ * Subrequest limiti için optimize edilmiş: maksimum 40 subrequest (son sayfa tespiti için 8-10, scraping için 30)
  */
 async function scrapeAllPages(baseUrl, slug, id, lastPage) {
   const allEntries = []
   const normalizedBase = normalizeBaseUrl(baseUrl)
   
-  // Maksimum sayfa limiti (Worker timeout için)
-  const MAX_PAGES = 50
-  const pagesToScrape = Math.min(lastPage, MAX_PAGES)
+  // Cloudflare Workers subrequest limiti: 50
+  // Son sayfa tespiti için ~8-10 kullandık, scraping için ~40 bırakıyoruz
+  const MAX_SUBREQUESTS_FOR_SCRAPING = 40
+  const MAX_PAGES = Math.min(lastPage, MAX_SUBREQUESTS_FOR_SCRAPING)
+  const pagesToScrape = MAX_PAGES
   
-  console.log(`Scraping ${pagesToScrape} pages from ${normalizedBase}`)
+  console.log(`Scraping ${pagesToScrape} pages from ${normalizedBase} (limited to prevent subrequest limit)`)
   
   for (let p = 1; p <= pagesToScrape; p++) {
     try {
@@ -630,6 +646,10 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
       // Diğer sayfalar için devam et
       continue
     }
+  }
+  
+  if (lastPage > MAX_PAGES) {
+    console.log(`Warning: Topic has ${lastPage} pages but only scraped first ${MAX_PAGES} pages due to subrequest limit`)
   }
   
   return allEntries
