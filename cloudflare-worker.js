@@ -173,31 +173,69 @@ export default {
         if (allEntries.length === 0) {
           // Test the first page to see what HTML we're getting
           let testHtml = ''
+          let fetchError = null
+          let fetchStatus = null
+          
           try {
             const testUrl = buildPageUrl(normalizeBaseUrl(baseUrl), 1)
+            console.log('Testing URL:', testUrl)
+            
             const testResponse = await fetch(testUrl, {
               headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1'
               }
             })
-            testHtml = await testResponse.text()
+            
+            fetchStatus = testResponse.status
+            console.log('Fetch status:', fetchStatus)
+            
+            if (!testResponse.ok) {
+              fetchError = `HTTP ${fetchStatus}`
+            } else {
+              testHtml = await testResponse.text()
+              console.log('HTML fetched, length:', testHtml.length)
+            }
           } catch (e) {
-            // Ignore
+            fetchError = e.message
+            console.error('Fetch error:', e)
           }
           
-          const isChallenge = /cloudflare|challenge|checking/i.test(testHtml)
-          const hasEntryIds = /id=["']entry-\d+["']/i.test(testHtml)
-          const hasEntryList = /id=["']entry-item-list["']/i.test(testHtml)
+          const isChallenge = testHtml ? /cloudflare|challenge|checking/i.test(testHtml) : false
+          const hasEntryIds = testHtml ? /id=["']entry-\d+["']/i.test(testHtml) : false
+          const hasEntryList = testHtml ? /id=["']entry-item-list["']/i.test(testHtml) : false
+          
+          let errorMsg = 'No entries found. '
+          
+          if (testHtml.length === 0) {
+            errorMsg += `HTML çekilemedi (length=0). `
+            if (fetchError) {
+              errorMsg += `Fetch hatası: ${fetchError}. `
+            }
+            if (fetchStatus) {
+              errorMsg += `HTTP Status: ${fetchStatus}. `
+            }
+            errorMsg += `Ekşi Sözlük Worker'dan gelen istekleri engelliyor olabilir. Cloudflare koruması nedeniyle bu normal olabilir.`
+          } else {
+            errorMsg += `Debug: HTML length=${testHtml.length}, isCloudflareChallenge=${isChallenge}, hasEntryIds=${hasEntryIds}, hasEntryList=${hasEntryList}.`
+          }
           
           return new Response(JSON.stringify({
             success: false,
-            error: `No entries found. Debug info: HTML length=${testHtml.length}, isCloudflareChallenge=${isChallenge}, hasEntryIds=${hasEntryIds}, hasEntryList=${hasEntryList}. Please try the /api/test-parse endpoint with your URL to see detailed HTML structure.`,
+            error: errorMsg + ' Please try the /api/test-parse endpoint with your URL to see detailed HTML structure.',
             debug: {
               url: baseUrl,
               lastPage,
               slug,
               id,
               testPageHtmlLength: testHtml.length,
+              fetchStatus,
+              fetchError,
               isCloudflareChallenge: isChallenge,
               hasEntryIds,
               hasEntryList,
@@ -808,24 +846,48 @@ async function scrapeTopicEntries(slug, id, limit = 50) {
   try {
     // Başlık sayfasını çek
     const url = `https://eksisozluk.com/${slug}--${id}`
+    console.log('Fetching URL:', url)
+    
     const response = await fetch(url, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Referer': 'https://eksisozluk.com/'
       }
     })
 
+    console.log('Response status:', response.status)
+    console.log('Response headers:', Object.fromEntries(response.headers.entries()))
+
     if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`)
+      const errorText = await response.text().catch(() => '')
+      throw new Error(`HTTP error! status: ${response.status}, body: ${errorText.substring(0, 200)}`)
     }
 
     const html = await response.text()
+    console.log('HTML fetched, length:', html.length)
+    
+    if (!html || html.length === 0) {
+      throw new Error('Empty HTML response received from Ekşi Sözlük')
+    }
     
     // Entry'leri parse et
     const entries = parseEntriesFromHTML(html, limit)
+    console.log('Parsed entries:', entries.length)
     
     return entries
   } catch (error) {
     console.error('Entry scraping error:', error)
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      url: `https://eksisozluk.com/${slug}--${id}`
+    })
     throw error
   }
 }
