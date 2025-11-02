@@ -800,113 +800,145 @@ function parseEntriesFromHTML(html, limit = 50) {
       return []
     }
     
-    // Python mantığı: #pinned-entry .content ve #entry-item-list .content
-    // Daha basit yaklaşım: Tüm HTML'de entry-XXXXX ID'sine sahip li elementlerini bul
+    // Python mantığını taklit et: #pinned-entry .content ve #entry-item-list .content
+    // CSS selector: #pinned-entry .content, #entry-item-list .content
     
-    // 1. Pinned entry (varsa)
-    const pinnedPattern = /<[^>]*\bid=["']pinned-entry["'][^>]*>([\s\S]*?)<\/[^>]+>/i
-    const pinnedMatch = html.match(pinnedPattern)
-    if (pinnedMatch) {
-      const pinnedHtml = pinnedMatch[1]
-      // Pinned entry içinde .content bul
-      const pinnedContentPattern = /<[^>]*\bclass=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i
-      const pinnedContentMatch = pinnedHtml.match(pinnedContentPattern)
-      if (pinnedContentMatch) {
+    // 1. #pinned-entry .content - Pinned entry içindeki .content
+    const pinnedContainerMatch = html.match(/<[^>]*id=["']pinned-entry["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+    if (pinnedContainerMatch) {
+      const pinnedContainer = pinnedContainerMatch[1]
+      // Pinned container içindeki tüm .content elementlerini bul
+      const pinnedContentRegex = /<[^>]*class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/gi
+      let pinnedContentMatch
+      
+      while ((pinnedContentMatch = pinnedContentRegex.exec(pinnedContainer)) !== null) {
         const content = cleanEntryText(pinnedContentMatch[1])
         if (content && content.trim().length > 0) {
           entries.push({
             id: 'pinned',
             order: 0,
             content,
-            author: parseEntryAuthor(pinnedHtml) || 'Bilinmeyen',
-            date: parseEntryDate(pinnedHtml),
-            favoriteCount: parseEntryFavCount(pinnedHtml),
+            author: parseEntryAuthor(pinnedContainer) || 'Bilinmeyen',
+            date: parseEntryDate(pinnedContainer),
+            favoriteCount: parseEntryFavCount(pinnedContainer),
             entryUrl: null
           })
+          break // Sadece ilk pinned content'i al
         }
       }
     }
     
-    // 2. Regular entries: Tüm HTML'de id="entry-XXXXX" olan li elementlerini bul
-    // Daha agresif yaklaşım: Önce tüm entry-XXXXX ID'lerini bul, sonra içeriklerini çıkar
+    // 2. #entry-item-list .content - Entry list içindeki tüm .content elementleri
+    // Önce entry-item-list container'ını bul
+    let entryListContainer = null
+    const entryListMatch = html.match(/<[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+    if (entryListMatch) {
+      entryListContainer = entryListMatch[1]
+      console.log('Found entry-item-list container')
+    } else {
+      // Bulamazsa, tüm HTML'de ara (fallback)
+      entryListContainer = html
+      console.log('entry-item-list not found, searching entire HTML')
+    }
     
-    // Yöntem 1: <li id="entry-XXXXX"> pattern'i
-    let entryPattern = /<li[^>]*\bid=["']entry-(\d+)["'][^>]*>([\s\S]{0,50000}?)<\/li>/gi
-    let foundEntries = []
-    let entryMatch
-    entryPattern.lastIndex = 0
+    // Entry-item-list içindeki tüm entry ID'lerini bul ve map'le
+    const entryIdMap = new Map()
+    const entryIdPattern = /id=["']entry-(\d+)["']/gi
+    let idMatch
     
-    while ((entryMatch = entryPattern.exec(html)) !== null && foundEntries.length < limit + 20) {
-      const entryId = entryMatch[1]
-      const entryHtml = entryMatch[2]
-      
-      // Entry içinde .content class'ına sahip elementi bul
-      // Birden fazla pattern dene
-      let contentMatch = null
-      
-      // Pattern 1: <div class="content">
-      contentMatch = entryHtml.match(/<div[^>]*\bclass=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
-      
-      // Pattern 2: <div class="...content...">
-      if (!contentMatch) {
-        contentMatch = entryHtml.match(/<div[^>]*class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
+    entryIdPattern.lastIndex = 0
+    while ((idMatch = entryIdPattern.exec(entryListContainer)) !== null) {
+      const entryId = idMatch[1]
+      if (!entryIdMap.has(entryId)) {
+        entryIdMap.set(entryId, idMatch.index)
+      }
+    }
+    
+    console.log(`Found ${entryIdMap.size} entry IDs`)
+    
+    // Şimdi entry-item-list içindeki tüm .content elementlerini bul
+    // Her content'in hangi entry'ye ait olduğunu bulmaya çalış
+    const contentRegex = /<[^>]*class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/gi
+    const foundEntries = []
+    let contentMatch
+    contentRegex.lastIndex = 0
+    
+    while ((contentMatch = contentRegex.exec(entryListContainer)) !== null && foundEntries.length < limit + 20) {
+      const content = cleanEntryText(contentMatch[1])
+      if (!content || content.trim().length < 3) {
+        continue
       }
       
-      // Pattern 3: Herhangi bir tag içinde content class'ı
-      if (!contentMatch) {
-        contentMatch = entryHtml.match(/<[^>]*class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+      // Bu content'in hangi entry'ye ait olduğunu bul
+      // Content'in önündeki en yakın entry-ID'yi bul
+      const contentStart = contentMatch.index
+      let closestEntryId = null
+      let closestDistance = Infinity
+      
+      // Content'in önündeki (daha erken pozisyondaki) entry ID'lerini kontrol et
+      for (const [entryId, entryIndex] of entryIdMap.entries()) {
+        if (entryIndex < contentStart && (contentStart - entryIndex) < closestDistance) {
+          closestDistance = contentStart - entryIndex
+          closestEntryId = entryId
+        }
       }
       
-      // Pattern 4: Çok agresif - content kelimesi geçen herhangi bir element
-      if (!contentMatch) {
-        contentMatch = entryHtml.match(/<[^>]*>([^<]*content[^<]*)<\/[^>]+>/i)
+      // Eğer önünde entry ID bulamazsa, content'ten sonraki ilk entry ID'yi kullan
+      if (!closestEntryId) {
+        for (const [entryId, entryIndex] of entryIdMap.entries()) {
+          if (entryIndex > contentStart && (entryIndex - contentStart) < closestDistance) {
+            closestDistance = entryIndex - contentStart
+            closestEntryId = entryId
+          }
+        }
       }
       
-      if (contentMatch) {
-        const content = cleanEntryText(contentMatch[1])
-        if (content && content.trim().length > 3) {
+      if (closestEntryId) {
+        // Entry HTML'ini bul (entry ID'den sonraki content'e kadar)
+        const entryStartPattern = new RegExp(`<[^>]*id=["']entry-${closestEntryId}["'][^>]*>([\\s\\S]{0,50000}?)</[^>]+>`, 'i')
+        const entryHtmlMatch = entryListContainer.match(entryStartPattern)
+        const entryHtml = entryHtmlMatch ? entryHtmlMatch[0] : ''
+        
+        // Bu entry ID'yi daha önce ekledik mi kontrol et
+        const existing = foundEntries.find(e => e.id === closestEntryId)
+        if (!existing) {
           foundEntries.push({
-            id: entryId,
+            id: closestEntryId,
             content,
             author: parseEntryAuthor(entryHtml) || 'Bilinmeyen',
             date: parseEntryDate(entryHtml),
             favoriteCount: parseEntryFavCount(entryHtml),
-            entryUrl: `https://eksisozluk.com/entry/${entryId}`,
-            position: entryMatch.index
+            entryUrl: `https://eksisozluk.com/entry/${closestEntryId}`,
+            position: contentMatch.index
           })
         }
-      } else {
-        // Debug: Content bulunamadı ama entry bulundu
-        console.log(`Warning: Entry ${entryId} found but no content matched. Entry HTML length: ${entryHtml.length}`)
       }
     }
     
-    // Yöntem 2: Eğer hiç entry bulunamadıysa, daha basit bir yaklaşım dene
+    // Eğer hala entry bulunamadıysa, daha basit yaklaşım: direkt entry-XXXXX içindeki content'i bul
     if (foundEntries.length === 0) {
-      console.log('Trying alternative parsing method...')
-      // Sadece entry-XXXXX ID'sine sahip tüm elementleri bul (li olmasa bile)
-      const altPattern = /<[^>]*\bid=["']entry-(\d+)["'][^>]*>([\s\S]{0,50000}?)<\/[^>]+>/gi
-      altPattern.lastIndex = 0
-      
-      while ((entryMatch = altPattern.exec(html)) !== null && foundEntries.length < limit + 20) {
-        const entryId = entryMatch[1]
-        const entryHtml = entryMatch[2]
-        
-        // Daha geniş content arama
-        const contentMatch = entryHtml.match(/<[^>]*>([\s\S]{20,})<\/[^>]+>/i) // En az 20 karakter içerik
-        
-        if (contentMatch) {
-          const content = cleanEntryText(contentMatch[1])
-          if (content && content.trim().length > 10) {
-            foundEntries.push({
-              id: entryId,
-              content,
-              author: parseEntryAuthor(entryHtml) || 'Bilinmeyen',
-              date: parseEntryDate(entryHtml),
-              favoriteCount: parseEntryFavCount(entryHtml),
-              entryUrl: `https://eksisozluk.com/entry/${entryId}`,
-              position: entryMatch.index
-            })
+      console.log('Trying direct entry parsing...')
+      for (const [entryId, entryIndex] of Array.from(entryIdMap.entries()).slice(0, limit + 10)) {
+        // Entry'nin HTML'ini bul
+        const entryPattern = new RegExp(`<[^>]*id=["']entry-${entryId}["'][^>]*>([\\s\\S]{0,50000}?)</[^>]+>`, 'i')
+        const entryMatch = entryListContainer.match(entryPattern)
+        if (entryMatch) {
+          const entryHtml = entryMatch[0]
+          // Entry içindeki content'i bul
+          const contentMatch = entryHtml.match(/<[^>]*class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+          if (contentMatch) {
+            const content = cleanEntryText(contentMatch[1])
+            if (content && content.trim().length > 3) {
+              foundEntries.push({
+                id: entryId,
+                content,
+                author: parseEntryAuthor(entryHtml) || 'Bilinmeyen',
+                date: parseEntryDate(entryHtml),
+                favoriteCount: parseEntryFavCount(entryHtml),
+                entryUrl: `https://eksisozluk.com/entry/${entryId}`,
+                position: entryIndex
+              })
+            }
           }
         }
       }
@@ -923,7 +955,7 @@ function parseEntriesFromHTML(html, limit = 50) {
       })
     })
     
-    console.log(`Parsed ${entries.length} entries (${foundEntries.length} found, ${entries.length - foundEntries.length} pinned)`)
+    console.log(`Parsed ${entries.length} entries (${foundEntries.length} regular, ${entries.length - foundEntries.length} pinned)`)
     
     // Limit kadar döndür
     return entries.slice(0, limit)
