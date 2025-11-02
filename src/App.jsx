@@ -18,8 +18,11 @@ function App() {
 
   // Cloudflare Worker URL'i
   // Development: http://localhost:8787
-  // Production: Deploy ettiğin Cloudflare Worker URL'i
-  const WORKER_URL = import.meta.env.VITE_WORKER_URL || 'http://localhost:8787'
+  // Production: https://eksi-baslik-scraper.kozan26.workers.dev
+  const WORKER_URL = import.meta.env.VITE_WORKER_URL || 
+    (import.meta.env.MODE === 'production' 
+      ? 'https://eksi-baslik-scraper.kozan26.workers.dev'
+      : 'http://localhost:8787')
 
   const fetchGundem = async () => {
     setLoading(true)
