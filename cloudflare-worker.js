@@ -904,13 +904,22 @@ function parseEntriesFromHTML(html, limit = 50) {
     
     // Entry-item-list içindeki tüm .content elementlerini bul (Python'daki gibi direkt)
     // Python'da entry ID'sine bakmıyor, sadece content'leri sırayla alıyor
-    const contentRegex = /<[^>]*class=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/gi
+    console.log(`entry-item-list container length: ${entryListContainer.length}`)
+    
+    // Önce content class'ını ara (farklı pattern'lerle)
+    const contentRegex1 = /<[^>]*class=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/gi
+    const contentRegex2 = /<[^>]*class=["']([^"']*\bcontent\b[^"']*)["'][^>]*>([\s\S]*?)<\/[^>]+>/gi
+    
+    // Test: content class'ı var mı?
+    const contentTest = entryListContainer.match(/class=["'][^"']*content[^"']*["']/gi)
+    console.log(`Content class matches found: ${contentTest ? contentTest.length : 0}`)
+    
     const foundEntries = []
     let contentMatch
-    contentRegex.lastIndex = 0
+    contentRegex1.lastIndex = 0
     
     let entryOrder = 0
-    while ((contentMatch = contentRegex.exec(entryListContainer)) !== null && foundEntries.length < limit + 20) {
+    while ((contentMatch = contentRegex1.exec(entryListContainer)) !== null && foundEntries.length < limit + 20) {
       const content = cleanEntryText(contentMatch[1])
       if (!content || content.trim().length < 3) {
         continue
@@ -997,8 +1006,34 @@ function parseEntriesFromHTML(html, limit = 50) {
       }
     }
     
-    // Eğer hala entry bulunamadıysa, direkt entry-XXXXX içindeki content'i bul (fallback)
+    // Eğer hala entry bulunamadıysa, alternatif yöntemler dene
     if (foundEntries.length === 0 && entryListContainer) {
+      console.log('No entries found with content class, trying alternative methods...')
+      
+      // Alternatif 1: Herhangi bir text içeren div/span/p elementi bul
+      const textElements = entryListContainer.match(/<(div|span|p)[^>]*>([\s\S]{20,}?)<\/\1>/gi)
+      if (textElements) {
+        console.log(`Found ${textElements.length} text elements, trying to extract...`)
+        for (let i = 0; i < Math.min(textElements.length, limit); i++) {
+          const elem = textElements[i]
+          const content = cleanEntryText(elem)
+          if (content && content.trim().length > 10) {
+            foundEntries.push({
+              id: `order-${i}`,
+              content,
+              author: 'Bilinmeyen',
+              date: null,
+              favoriteCount: 0,
+              entryUrl: null,
+              position: i
+            })
+          }
+        }
+      }
+      
+      // Alternatif 2: Direkt entry-XXXXX içindeki content'i bul (fallback)
+      if (foundEntries.length === 0) {
+        console.log('Trying direct entry parsing (fallback)...')
       console.log('Trying direct entry parsing (fallback)...')
       // Tüm entry-XXXXX ID'lerini bul
       const entryIdPattern = /id=["']entry-(\d+)["']/gi
