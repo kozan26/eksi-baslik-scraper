@@ -1034,7 +1034,6 @@ function parseEntriesFromHTML(html, limit = 50) {
       // Alternatif 2: Direkt entry-XXXXX içindeki content'i bul (fallback)
       if (foundEntries.length === 0) {
         console.log('Trying direct entry parsing (fallback)...')
-      console.log('Trying direct entry parsing (fallback)...')
       // Tüm entry-XXXXX ID'lerini bul
       const entryIdPattern = /id=["']entry-(\d+)["']/gi
       const entryIds = []
