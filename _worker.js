@@ -209,8 +209,21 @@ const HTML_PAGE = `<!DOCTYPE html>
 </html>`;
 
 const USER_AGENTS = {
-  web: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-  mobile: "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+  web: {
+    "user-agent":
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "sec-ch-ua":
+      '"Google Chrome";v="120", "Not(A:Brand";v="24", "Chromium";v="120"',
+    "sec-ch-ua-platform": '"Windows"',
+  },
+  mobile: {
+    "user-agent":
+      "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+    "sec-ch-ua":
+      '"Google Chrome";v="120", "Not(A:Brand";v="24", "Chromium";v="120"',
+    "sec-ch-ua-platform": '"Android"',
+    "sec-ch-ua-mobile": "?1",
+  },
 };
 
 export default {
@@ -259,7 +272,7 @@ async function handleScrapeRequest(urlParam) {
       console.log(`Fetching p=${page} url=${pageUrl}`);
       try {
         const html = await fetchHtml(pageUrl);
-        const items = extractEntries(html);
+        const items = await extractEntries(html);
         entries.push(...items);
         console.log(`p=${page} entries=${items.length} total=${entries.length}`);
       } catch (err) {
@@ -300,17 +313,31 @@ function buildPageUrl(baseUrl, page) {
 async function fetchHtml(url) {
   let lastErr;
   for (const mode of ["web", "mobile"]) {
-    const ua = USER_AGENTS[mode];
     for (let counter = 1; counter <= RETRIES_PER_MODE; counter += 1) {
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+        const headers = {
+          accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "accept-language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+          "cache-control": "no-cache",
+          pragma: "no-cache",
+          referer: "https://eksisozluk.com/",
+          "upgrade-insecure-requests": "1",
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "none",
+          "sec-fetch-user": "?1",
+          ...USER_AGENTS[mode],
+        };
         const resp = await fetch(url, {
           signal: controller.signal,
-          headers: {
-            "user-agent": ua,
-            "accept-language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-            accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          headers,
+          redirect: "follow",
+          cf: {
+            cacheEverything: false,
+            scrapeShield: false,
           },
         });
         clearTimeout(timeout);
@@ -320,11 +347,24 @@ async function fetchHtml(url) {
             return text;
           }
         }
-        lastErr = new Error(`HTTP ${resp.status}`);
-        console.warn(`GET fail mode=${mode} try=${counter}/${RETRIES_PER_MODE} status=${resp.status}`);
+        const body = await resp.text();
+        lastErr = new Error(
+          `HTTP ${resp.status}${
+            body && body.includes("cf-chl")
+              ? " (Cloudflare challenge detected)"
+              : ""
+          }`,
+        );
+        console.warn(
+          `GET fail mode=${mode} try=${counter}/${RETRIES_PER_MODE} status=${resp.status}`,
+        );
       } catch (err) {
         lastErr = err;
-        console.warn(`GET fail mode=${mode} try=${counter}/${RETRIES_PER_MODE} err=${err && err.message}`);
+        console.warn(
+          `GET fail mode=${mode} try=${counter}/${RETRIES_PER_MODE} err=${
+            err && err.message
+          }`,
+        );
       }
       await sleep(backoff(counter));
     }
@@ -332,18 +372,11 @@ async function fetchHtml(url) {
   throw lastErr || new Error("Fetch failed");
 }
 
-function extractEntries(html) {
-  const results = [];
-  const contentRegex = /<div\b[^>]*class="[^"]*\bcontent\b[^"]*"[^>]*>((?:.|\n)*?)<\/div>/gi;
-  let match;
-  while ((match = contentRegex.exec(html)) !== null) {
-    const raw = match[1];
-    const txt = stripHtml(raw).trim();
-    if (txt) {
-      results.push(txt);
-    }
+async function extractEntries(html) {
+  if (typeof HTMLRewriter === "function") {
+    return extractEntriesWithHTMLRewriter(html);
   }
-  return results;
+  return extractEntriesWithRegex(html);
 }
 
 function stripHtml(fragment) {
@@ -376,6 +409,9 @@ function safeFromCodePoint(code) {
 }
 
 function formatEntries(entries) {
+  if (!entries.length) {
+    return "No entries scraped. The topic may be empty or the source blocked the request.\n";
+  }
   return entries.map((entry) => `${BULLET}${entry.replace(/\r?\n/g, "\n  ")}`).join("\n\n") + "\n";
 }
 
@@ -402,7 +438,7 @@ async function discoverLastPageSafely(baseUrl) {
   for (let page = current + 1; page <= current + MAX_SEQ_WALK; page += 1) {
     try {
       const html = await fetchHtml(buildPageUrl(baseUrl, page));
-      const items = extractEntries(html);
+      const items = await extractEntries(html);
       if (!items.length) {
         console.log(`Walk stop: p=${page} empty -> last=${page - 1}`);
         return page - 1;
@@ -463,3 +499,64 @@ const HTML_ENTITIES = {
   nbsp: " ",
   tab: "\t",
 };
+
+function extractEntriesWithRegex(html) {
+  const results = [];
+  const contentRegex =
+    /<div\b[^>]*class="[^"]*\bcontent\b[^"]*"[^>]*>((?:.|\n)*?)<\/div>/gi;
+  let match;
+  while ((match = contentRegex.exec(html)) !== null) {
+    const raw = match[1];
+    const txt = stripHtml(raw).trim();
+    if (txt) {
+      results.push(txt);
+    }
+  }
+  return results;
+}
+
+function extractEntriesWithHTMLRewriter(html) {
+  const entries = [];
+  const selectors = ["#pinned-entry .content", "#entry-item-list .content"];
+  const handlers = selectors.map(() => createContentCollector(entries));
+  let rewriter = new HTMLRewriter();
+  selectors.forEach((selector, idx) => {
+    rewriter = rewriter.on(selector, handlers[idx]);
+  });
+  return rewriter
+    .transform(new Response(html))
+    .arrayBuffer()
+    .then(() => entries)
+    .catch((err) => {
+      console.warn("HTMLRewriter failed, falling back to regex:", err);
+      return extractEntriesWithRegex(html);
+    });
+}
+
+function createContentCollector(entries) {
+  let buffer = "";
+  return {
+    element() {
+      buffer = "";
+    },
+    text(textChunk) {
+      buffer += textChunk.text;
+    },
+    end() {
+      const cleaned = normalizeWhitespace(buffer);
+      if (cleaned) {
+        entries.push(cleaned);
+      }
+    },
+  };
+}
+
+function normalizeWhitespace(text) {
+  return decodeEntities(
+    text
+      .replace(/\u00a0/g, " ")
+      .replace(/\r?\n\s*/g, "\n")
+      .replace(/[ \t]+/g, " ")
+      .trim(),
+  );
+}
