@@ -223,6 +223,98 @@ export default {
       }
     }
 
+    // Route: /api/test-parse - Test entry parsing with a URL
+    if (url.pathname === '/api/test-parse') {
+      try {
+        const testUrl = url.searchParams.get('url')
+        if (!testUrl) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'URL parameter is required'
+          }), {
+            status: 400,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json',
+            },
+          })
+        }
+
+        const urlObj = new URL(testUrl)
+        const pathMatch = urlObj.pathname.match(/\/([^/]+)--(\d+)/)
+        if (!pathMatch) {
+          return new Response(JSON.stringify({
+            success: false,
+            error: 'Invalid Ekşi Sözlük URL format'
+          }), {
+            status: 400,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json',
+            },
+          })
+        }
+
+        const slug = pathMatch[1]
+        const id = pathMatch[2]
+        const baseUrl = `https://eksisozluk.com/${slug}--${id}`
+
+        const response = await fetch(baseUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        })
+
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`)
+        }
+
+        const html = await response.text()
+        
+        // Test parsing
+        const entries = parseEntriesFromHTML(html, 10)
+        
+        // Check for key HTML elements
+        const hasPinnedEntry = /id=["']pinned-entry["']/i.test(html)
+        const hasEntryList = /id=["']entry-item-list["']/i.test(html)
+        const entryIdMatches = html.match(/id=["']entry-(\d+)["']/gi) || []
+        const contentMatches = html.match(/class=["'][^"']*content[^"']*["']/gi) || []
+
+        return new Response(JSON.stringify({
+          success: true,
+          url: baseUrl,
+          htmlLength: html.length,
+          hasPinnedEntry,
+          hasEntryList,
+          entryIdCount: entryIdMatches.length,
+          contentClassCount: contentMatches.length,
+          parsedEntries: entries.length,
+          entries: entries.slice(0, 3), // First 3 entries as sample
+          sampleHtml: {
+            first1000: html.substring(0, 1000),
+            entryItemListSnippet: html.match(/<ul[^>]*id=["']entry-item-list["'][^>]*>[\s\S]{0,500}/i)?.[0] || 'Not found',
+            firstEntryMatch: html.match(/<li[^>]*id=["']entry-\d+["'][^>]*>[\s\S]{0,500}/i)?.[0] || 'Not found'
+          }
+        }), {
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        })
+      } catch (error) {
+        return new Response(JSON.stringify({
+          success: false,
+          error: error.message
+        }), {
+          status: 500,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        })
+      }
+    }
+
     // Route: /api/test-entry - Entry parsing test
     if (url.pathname === '/api/test-entry') {
       try {
@@ -736,31 +828,43 @@ function parseEntriesFromHTML(html, limit = 50) {
     }
     
     // 2. Regular entries: Tüm HTML'de id="entry-XXXXX" olan li elementlerini bul
-    // Non-greedy matching kullan ama makul bir limit koy
-    const entryPattern = /<li[^>]*\bid=["']entry-(\d+)["'][^>]*>([\s\S]{0,50000}?)<\/li>/gi
-    const foundEntries = []
+    // Daha agresif yaklaşım: Önce tüm entry-XXXXX ID'lerini bul, sonra içeriklerini çıkar
     
+    // Yöntem 1: <li id="entry-XXXXX"> pattern'i
+    let entryPattern = /<li[^>]*\bid=["']entry-(\d+)["'][^>]*>([\s\S]{0,50000}?)<\/li>/gi
+    let foundEntries = []
     let entryMatch
-    entryPattern.lastIndex = 0 // Reset
+    entryPattern.lastIndex = 0
     
     while ((entryMatch = entryPattern.exec(html)) !== null && foundEntries.length < limit + 20) {
       const entryId = entryMatch[1]
       const entryHtml = entryMatch[2]
       
       // Entry içinde .content class'ına sahip elementi bul
-      // Önce div, sonra herhangi bir element
-      let contentPattern = /<div[^>]*\bclass=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i
-      let contentMatch = entryHtml.match(contentPattern)
+      // Birden fazla pattern dene
+      let contentMatch = null
       
+      // Pattern 1: <div class="content">
+      contentMatch = entryHtml.match(/<div[^>]*\bclass=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
+      
+      // Pattern 2: <div class="...content...">
       if (!contentMatch) {
-        // Fallback: herhangi bir tag
-        contentPattern = /<[^>]*\bclass=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i
-        contentMatch = entryHtml.match(contentPattern)
+        contentMatch = entryHtml.match(/<div[^>]*class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
+      }
+      
+      // Pattern 3: Herhangi bir tag içinde content class'ı
+      if (!contentMatch) {
+        contentMatch = entryHtml.match(/<[^>]*class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+      }
+      
+      // Pattern 4: Çok agresif - content kelimesi geçen herhangi bir element
+      if (!contentMatch) {
+        contentMatch = entryHtml.match(/<[^>]*>([^<]*content[^<]*)<\/[^>]+>/i)
       }
       
       if (contentMatch) {
         const content = cleanEntryText(contentMatch[1])
-        if (content && content.trim().length > 3) { // En az 3 karakter
+        if (content && content.trim().length > 3) {
           foundEntries.push({
             id: entryId,
             content,
@@ -770,6 +874,40 @@ function parseEntriesFromHTML(html, limit = 50) {
             entryUrl: `https://eksisozluk.com/entry/${entryId}`,
             position: entryMatch.index
           })
+        }
+      } else {
+        // Debug: Content bulunamadı ama entry bulundu
+        console.log(`Warning: Entry ${entryId} found but no content matched. Entry HTML length: ${entryHtml.length}`)
+      }
+    }
+    
+    // Yöntem 2: Eğer hiç entry bulunamadıysa, daha basit bir yaklaşım dene
+    if (foundEntries.length === 0) {
+      console.log('Trying alternative parsing method...')
+      // Sadece entry-XXXXX ID'sine sahip tüm elementleri bul (li olmasa bile)
+      const altPattern = /<[^>]*\bid=["']entry-(\d+)["'][^>]*>([\s\S]{0,50000}?)<\/[^>]+>/gi
+      altPattern.lastIndex = 0
+      
+      while ((entryMatch = altPattern.exec(html)) !== null && foundEntries.length < limit + 20) {
+        const entryId = entryMatch[1]
+        const entryHtml = entryMatch[2]
+        
+        // Daha geniş content arama
+        const contentMatch = entryHtml.match(/<[^>]*>([\s\S]{20,})<\/[^>]+>/i) // En az 20 karakter içerik
+        
+        if (contentMatch) {
+          const content = cleanEntryText(contentMatch[1])
+          if (content && content.trim().length > 10) {
+            foundEntries.push({
+              id: entryId,
+              content,
+              author: parseEntryAuthor(entryHtml) || 'Bilinmeyen',
+              date: parseEntryDate(entryHtml),
+              favoriteCount: parseEntryFavCount(entryHtml),
+              entryUrl: `https://eksisozluk.com/entry/${entryId}`,
+              position: entryMatch.index
+            })
+          }
         }
       }
     }
