@@ -133,15 +133,55 @@ export default {
         const baseUrl = `https://eksisozluk.com/${slug}--${id}`
 
         // Discover last page and scrape all entries
-        const lastPage = await discoverLastPage(baseUrl)
-        const allEntries = await scrapeAllPages(baseUrl, slug, id, lastPage)
+        let lastPage
+        let allEntries = []
+        
+        try {
+          lastPage = await discoverLastPage(baseUrl)
+          console.log(`Discovered last page: ${lastPage} for ${baseUrl}`)
+        } catch (error) {
+          console.error('Error discovering last page:', error)
+          return new Response(JSON.stringify({
+            success: false,
+            error: `Failed to discover last page: ${error.message}`
+          }), {
+            status: 500,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json',
+            },
+          })
+        }
+
+        try {
+          allEntries = await scrapeAllPages(baseUrl, slug, id, lastPage)
+          console.log(`Total entries scraped: ${allEntries.length}`)
+        } catch (error) {
+          console.error('Error scraping pages:', error)
+          return new Response(JSON.stringify({
+            success: false,
+            error: `Failed to scrape entries: ${error.message}`
+          }), {
+            status: 500,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json',
+            },
+          })
+        }
 
         if (allEntries.length === 0) {
           return new Response(JSON.stringify({
             success: false,
-            error: 'No entries found. The entry parsing might have failed. Please check the Worker logs.'
+            error: 'No entries found. This might mean: 1) The topic has no entries, 2) Entry parsing failed, 3) The HTML structure might have changed. Please check Worker logs for details.',
+            debug: {
+              url: baseUrl,
+              lastPage,
+              slug,
+              id
+            }
           }), {
-            status: 404,
+            status: 200, // Change to 200 so frontend can see the error message
             headers: {
               ...corsHeaders,
               'Content-Type': 'application/json',

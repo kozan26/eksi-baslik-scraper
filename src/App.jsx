@@ -116,16 +116,18 @@ function App() {
       const url = `${WORKER_URL}/api/scrape-and-summarize?url=${encodeURIComponent(topicUrl.trim())}`
       const response = await fetch(url)
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-
+      // Parse JSON even if status is not 200
       const data = await response.json()
+
+      if (!response.ok && response.status !== 200) {
+        throw new Error(data.error || `HTTP error! status: ${response.status}`)
+      }
 
       if (data.success) {
         setSummaryData(data)
         setTopicUrl('')
       } else {
+        // Show error even if response was 200 (we changed it to 200 for better error handling)
         throw new Error(data.error || 'Scraping başarısız oldu')
       }
     } catch (err) {
