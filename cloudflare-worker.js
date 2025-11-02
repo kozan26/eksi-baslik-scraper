@@ -1309,30 +1309,62 @@ function maxPFromLinks(baseUrl, html) {
 async function discoverLastPage(baseUrl) {
   const normalizedBase = normalizeBaseUrl(baseUrl)
   
+  const fetchHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'DNT': '1',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Referer': 'https://eksisozluk.com/'
+  }
+  
   try {
     // Check page 1
     const page1Url = buildPageUrl(normalizedBase, 1)
+    console.log('Discover last page - fetching page 1:', page1Url)
+    
     const response1 = await fetch(page1Url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
+      headers: fetchHeaders
     })
+    
+    console.log('Page 1 response status:', response1.status)
+    
+    if (!response1.ok) {
+      throw new Error(`Page 1 failed with status ${response1.status}`)
+    }
+    
     const html1 = await response1.text()
+    console.log('Page 1 HTML length:', html1.length)
+    
+    if (!html1 || html1.length === 0) {
+      throw new Error('Page 1 returned empty HTML')
+    }
+    
     const m1 = maxPFromLinks(normalizedBase, html1)
+    console.log('Page 1 max page found:', m1)
     
     // Check page 2 if needed
     let m2 = m1
     if (m1 < 3) {
       try {
         const page2Url = buildPageUrl(normalizedBase, 2)
+        console.log('Fetching page 2:', page2Url)
+        
         const response2 = await fetch(page2Url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
+          headers: fetchHeaders
         })
-        const html2 = await response2.text()
-        m2 = Math.max(m1, maxPFromLinks(normalizedBase, html2))
+        
+        if (response2.ok) {
+          const html2 = await response2.text()
+          if (html2 && html2.length > 0) {
+            m2 = Math.max(m1, maxPFromLinks(normalizedBase, html2))
+            console.log('Page 2 max page found:', m2)
+          }
+        }
       } catch (e) {
+        console.log('Page 2 fetch error (ignoring):', e.message)
         // Ignore errors for page 2
       }
     }
@@ -1340,6 +1372,7 @@ async function discoverLastPage(baseUrl) {
     let candidate = Math.max(m1, m2)
     
     if (candidate >= 3) {
+      console.log('Last page discovered:', candidate)
       return candidate
     }
     
@@ -1351,32 +1384,40 @@ async function discoverLastPage(baseUrl) {
       try {
         const testUrl = buildPageUrl(normalizedBase, next)
         const testResponse = await fetch(testUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-          }
+          headers: fetchHeaders
         })
         
         if (!testResponse.ok || testResponse.status === 404) {
+          console.log(`Page ${next} returned ${testResponse.status}, last page is ${candidate}`)
           return candidate
         }
         
         const testHtml = await testResponse.text()
+        
+        if (!testHtml || testHtml.length === 0) {
+          console.log(`Page ${next} returned empty HTML, last page is ${candidate}`)
+          return candidate
+        }
+        
         const items = parseEntriesFromHTML(testHtml, 1)
         
         if (items.length === 0) {
+          console.log(`Page ${next} has no entries, last page is ${candidate}`)
           return candidate
         }
         
         candidate = next
       } catch (e) {
+        console.log(`Page ${next} fetch error, last page is ${candidate}:`, e.message)
         return candidate
       }
     }
     
+    console.log('Last page discovered (max reached):', candidate)
     return candidate
   } catch (error) {
     console.error('Last page discovery error:', error)
-    return 1
+    throw error // Re-throw to let caller handle it
   }
 }
 
