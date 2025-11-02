@@ -415,13 +415,15 @@ function parseEntriesFromHTML(html, limit = 1000) {
     }
     
     // Entry-item-list içindeki tüm .content elementlerini bul
+    // Python'daki gibi: TÜM content elementlerini bul, limit olmadan (limit sadece return için)
     const contentRegex = /<[^>]*class=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/gi
     const foundEntries = []
     let contentMatch
     contentRegex.lastIndex = 0
     
     let entryOrder = 0
-    while ((contentMatch = contentRegex.exec(entryListContainer)) !== null && foundEntries.length < limit + 20) {
+    // Limit koyma - tüm content elementlerini bul (Python gibi)
+    while ((contentMatch = contentRegex.exec(entryListContainer)) !== null) {
       const content = cleanEntryText(contentMatch[1])
       if (!content || content.trim().length < 3) {
         continue
@@ -459,7 +461,7 @@ function parseEntriesFromHTML(html, limit = 1000) {
         entryId = `order-${entryOrder}`
       }
             
-            // Duplicate kontrolü
+            // Duplicate kontrolü - aynı sayfa içinde aynı entry ID'yi skip et
       const existing = foundEntries.find(e => e.id === entryId)
       if (!existing) {
         foundEntries.push({
@@ -468,6 +470,9 @@ function parseEntriesFromHTML(html, limit = 1000) {
           position: contentStart
         })
         entryOrder++
+      } else {
+        // Duplicate entry ID bulundu - bu normal değil ama skip et
+        console.log(`Warning: Duplicate entry ID ${entryId} found on same page, skipping`)
       }
     }
     
@@ -482,9 +487,9 @@ function parseEntriesFromHTML(html, limit = 1000) {
       })
     })
     
-    console.log(`Parsed ${entries.length} entries (${foundEntries.length} regular, ${entries.length - foundEntries.length} pinned)`)
+    console.log(`Parsed ${entries.length} entries from HTML (${foundEntries.length} regular entries, ${entries.length - foundEntries.length} pinned)`)
     
-    // Limit kadar döndür
+    // Limit kadar döndür (sadece return için)
     return entries.slice(0, limit)
     
   } catch (error) {
@@ -633,29 +638,46 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
   for (let p = 1; p <= pagesToScrape; p++) {
     try {
       const pageUrl = buildPageUrl(normalizedBase, p)
+      console.log(`Fetching page ${p}: ${pageUrl}`)
+      
       const html = await fetchHtml(pageUrl)
-      const entries = parseEntriesFromHTML(html, 1000) // Get all entries from page (no limit per page)
+      const entries = parseEntriesFromHTML(html, 10000) // Get ALL entries from page (very high limit)
       
-      console.log(`Page ${p}: Found ${entries.length} entries`)
+      console.log(`Page ${p}: Parsed ${entries.length} entries from HTML`)
       
-      // Duplicate kontrolü yaparak ekle
+      // Python mantığı: Her sayfadan tüm entry'leri al ve ekle (duplicate kontrolü yap)
       let addedCount = 0
       let skippedCount = 0
       
       for (const entry of entries) {
         // Entry ID'si varsa ve daha önce eklenmemişse ekle
-        if (entry.id && !entryIdSet.has(entry.id)) {
-          entryIdSet.add(entry.id)
-          // Order'ı yeniden hesapla (toplam entry sayısı)
-          entry.order = allEntries.length
-          allEntries.push(entry)
-          addedCount++
-        } else if (!entry.id) {
-          // Entry ID yoksa (order-XXX gibi), content hash kullan
-          const contentHash = entry.content.substring(0, 100) // İlk 100 karakter için hash
-          const contentKey = `content-${p}-${contentHash.length}`
+        if (entry.id && entry.id !== 'pinned') {
+          // Pinned entry sadece bir kere eklenmeli (ilk sayfada)
+          if (!entryIdSet.has(entry.id)) {
+            entryIdSet.add(entry.id)
+            // Order'ı yeniden hesapla (toplam entry sayısı)
+            entry.order = allEntries.length
+            allEntries.push(entry)
+            addedCount++
+          } else {
+            skippedCount++
+            console.log(`Skipping duplicate entry ID: ${entry.id}`)
+          }
+        } else if (entry.id === 'pinned') {
+          // Pinned entry sadece ilk sayfada ve bir kere eklenmeli
+          if (p === 1 && !entryIdSet.has('pinned')) {
+            entryIdSet.add('pinned')
+            entry.order = allEntries.length
+            allEntries.push(entry)
+            addedCount++
+          } else {
+            skippedCount++
+          }
+        } else {
+          // Entry ID yoksa (order-XXX gibi), content substring kullan
+          const contentPreview = entry.content.substring(0, 50)
+          const contentKey = `content-${p}-${contentPreview.length}-${entry.content.length}`
           
-          // Basit duplicate kontrolü: aynı sayfada aynı uzunlukta content varsa skip et
           if (!entryIdSet.has(contentKey)) {
             entryIdSet.add(contentKey)
             entry.order = allEntries.length
@@ -664,21 +686,25 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
           } else {
             skippedCount++
           }
-        } else {
-          // Duplicate entry ID
-          skippedCount++
         }
       }
       
-      console.log(`Page ${p}: Found ${entries.length} entries, added ${addedCount}, skipped ${skippedCount} duplicates, total: ${allEntries.length}`)
+      console.log(`Page ${p}: Added ${addedCount} new entries, skipped ${skippedCount} duplicates, total unique entries: ${allEntries.length}`)
+      
+      // Python mantığı: Eğer sayfa boşsa (entry yoksa) dur
+      if (entries.length === 0 && p > 1) {
+        console.log(`Page ${p} has no entries, stopping (last full page: ${p - 1})`)
+        break
+      }
     } catch (error) {
       console.error(`Page ${p} failed: ${error.message}`)
       if (p === 1) {
         // İlk sayfa başarısız olursa durdur
         throw error
       }
-      // Diğer sayfalar için devam et
-      continue
+      // Python mantığı: Sayfa hatası varsa dur (son sayfa bulundu)
+      console.log(`Page ${p} error, stopping (last successful page: ${p - 1})`)
+      break
     }
   }
   
