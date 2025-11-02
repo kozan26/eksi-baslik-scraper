@@ -1389,21 +1389,47 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
   
   console.log(`Scraping ${lastPage} pages from ${normalizedBase}`)
   
+  const fetchHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Language': 'tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Accept-Encoding': 'gzip, deflate, br',
+    'DNT': '1',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Referer': 'https://eksisozluk.com/'
+  }
+  
   for (let p = 1; p <= lastPage; p++) {
     try {
       const pageUrl = buildPageUrl(normalizedBase, p)
+      console.log(`Fetching page ${p}: ${pageUrl}`)
+      
       const response = await fetch(pageUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
+        headers: fetchHeaders
       })
+      
+      console.log(`Page ${p} response status: ${response.status}`)
       
       if (!response.ok) {
         console.error(`Page ${p} failed: ${response.status}`)
+        // İlk sayfa başarısız olursa durdur
+        if (p === 1) {
+          throw new Error(`First page failed with status ${response.status}. Ekşi Sözlük Worker isteklerini engelliyor olabilir.`)
+        }
         continue
       }
       
       const html = await response.text()
+      console.log(`Page ${p} HTML length: ${html.length}`)
+      
+      if (!html || html.length === 0) {
+        console.error(`Page ${p} returned empty HTML`)
+        if (p === 1) {
+          throw new Error('First page returned empty HTML. Ekşi Sözlük Worker isteklerini engelliyor olabilir.')
+        }
+        continue
+      }
       const entries = parseEntriesFromHTML(html, 1000) // Get all entries from page
       
       if (entries.length === 0 && p === 1) {
