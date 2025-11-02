@@ -139,7 +139,7 @@ export default {
         if (allEntries.length === 0) {
           return new Response(JSON.stringify({
             success: false,
-            error: 'No entries found'
+            error: 'No entries found. The entry parsing might have failed. Please check the Worker logs.'
           }), {
             status: 404,
             headers: {
@@ -685,25 +685,37 @@ function parseEntriesFromHTML(html, limit = 50) {
       }
     }
     
-    // Entry list container'ını bul
-    const entryListMatch = html.match(/<[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+    // Entry list container'ını bul - daha esnek regex
+    // Önce <ul id="entry-item-list"> dene, sonra herhangi bir tag
+    let entryListMatch = html.match(/<ul[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/ul>/i)
     if (!entryListMatch) {
-      return entries.slice(0, limit)
+      entryListMatch = html.match(/<[^>]+id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
     }
     
-    const searchHtml = entryListMatch[1]
+    // Eğer hala bulamazsa, tüm HTML'de ara
+    const searchHtml = entryListMatch ? entryListMatch[1] : html
     
     // Entry item'larını bul: <li id="entry-XXXXX">
+    // Önce entry-item-list içinde, bulamazsa tüm HTML'de
     const entryItemPattern = /<li[^>]*id=["']entry-(\d+)["'][^>]*>([\s\S]*?)<\/li>/gi
     const foundEntries = []
     let entryMatch
+    
+    // Reset regex lastIndex
+    entryItemPattern.lastIndex = 0
     
     while ((entryMatch = entryItemPattern.exec(searchHtml)) !== null && foundEntries.length < limit + 10) {
       const entryId = entryMatch[1]
       const entryHtml = entryMatch[2]
       
       // Entry içindeki .content div'ini bul (Python gibi)
-      const contentMatch = entryHtml.match(/<[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+      // Önce .content class'ını içeren div'i bul
+      let contentMatch = entryHtml.match(/<div[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
+      if (!contentMatch) {
+        // Fallback: herhangi bir tag içinde content class'ı
+        contentMatch = entryHtml.match(/<[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+      }
+      
       if (contentMatch) {
         const content = cleanEntryText(contentMatch[1])
         if (content && content.trim().length > 0) {
@@ -742,6 +754,13 @@ function parseEntriesFromHTML(html, limit = 50) {
     */
   } catch (error) {
     console.error('Entry parse error:', error)
+    console.error('HTML length:', html ? html.length : 0)
+    // Debug: Check if entry-item-list exists
+    if (html) {
+      const hasEntryList = /id=["']entry-item-list["']/i.test(html)
+      const hasPinned = /id=["']pinned-entry["']/i.test(html)
+      console.error('Has entry-item-list:', hasEntryList, 'Has pinned-entry:', hasPinned)
+    }
     return []
   }
 }
@@ -958,6 +977,8 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
   const allEntries = []
   const normalizedBase = normalizeBaseUrl(baseUrl)
   
+  console.log(`Scraping ${lastPage} pages from ${normalizedBase}`)
+  
   for (let p = 1; p <= lastPage; p++) {
     try {
       const pageUrl = buildPageUrl(normalizedBase, p)
@@ -974,6 +995,13 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
       
       const html = await response.text()
       const entries = parseEntriesFromHTML(html, 1000) // Get all entries from page
+      
+      if (entries.length === 0 && p === 1) {
+        console.error(`Warning: No entries found on page 1. HTML length: ${html.length}`)
+        // Try to continue anyway, maybe other pages have entries
+      }
+      
+      console.log(`Page ${p}: Found ${entries.length} entries`)
       allEntries.push(...entries)
       
       // Small delay between pages
@@ -981,11 +1009,12 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
         await new Promise(resolve => setTimeout(resolve, 100))
       }
     } catch (error) {
-      console.error(`Error scraping page ${p}:`, error)
+      console.error(`Error scraping page ${p}:`, error.message)
       continue
     }
   }
   
+  console.log(`Total entries scraped: ${allEntries.length}`)
   return allEntries
 }
 
