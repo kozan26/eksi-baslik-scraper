@@ -1,7 +1,9 @@
 name = "eksi-baslik-scraper"
 main = "worker.js"
 compatibility_date = "2024-01-01"
+pages_build_output_dir = "."
 
 [build]
-command = ""
-
+command = "echo Skip build"
+[build.upload]
+format = "modules"
