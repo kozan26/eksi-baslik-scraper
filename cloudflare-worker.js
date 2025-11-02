@@ -639,6 +639,9 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
       console.log(`Page ${p}: Found ${entries.length} entries`)
       
       // Duplicate kontrolü yaparak ekle
+      let addedCount = 0
+      let skippedCount = 0
+      
       for (const entry of entries) {
         // Entry ID'si varsa ve daha önce eklenmemişse ekle
         if (entry.id && !entryIdSet.has(entry.id)) {
@@ -646,14 +649,28 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
           // Order'ı yeniden hesapla (toplam entry sayısı)
           entry.order = allEntries.length
           allEntries.push(entry)
+          addedCount++
         } else if (!entry.id) {
-          // Entry ID yoksa (order-XXX gibi), direkt ekle (duplicate riski var ama en azından entry'leri kaybetmeyiz)
-          entry.order = allEntries.length
-          allEntries.push(entry)
+          // Entry ID yoksa (order-XXX gibi), content hash kullan
+          const contentHash = entry.content.substring(0, 100) // İlk 100 karakter için hash
+          const contentKey = `content-${p}-${contentHash.length}`
+          
+          // Basit duplicate kontrolü: aynı sayfada aynı uzunlukta content varsa skip et
+          if (!entryIdSet.has(contentKey)) {
+            entryIdSet.add(contentKey)
+            entry.order = allEntries.length
+            allEntries.push(entry)
+            addedCount++
+          } else {
+            skippedCount++
+          }
+        } else {
+          // Duplicate entry ID
+          skippedCount++
         }
       }
       
-      console.log(`Page ${p}: Added ${entries.length} entries, total so far: ${allEntries.length}`)
+      console.log(`Page ${p}: Found ${entries.length} entries, added ${addedCount}, skipped ${skippedCount} duplicates, total: ${allEntries.length}`)
     } catch (error) {
       console.error(`Page ${p} failed: ${error.message}`)
       if (p === 1) {
