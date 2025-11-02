@@ -1,5 +1,5 @@
-// Cloudflare Worker adaptation of scraper.py logic.
-// Scrapes Ekşi Sözlük entries for a given topic and returns bullet-prefixed lines.
+// Cloudflare Pages _worker.js adaptation of scraper.py logic.
+// Scrapes Ekşi Sözlük entries for a given topic and returns bullet-prefixed text.
 
 const BASE_URL = "https://eksisozluk.com/2-kasim-2025-besiktas-fenerbahce-maci--8000065?a=popular";
 const TIMEOUT_MS = 25_000;
