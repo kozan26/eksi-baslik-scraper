@@ -657,233 +657,89 @@ async function scrapeTopicEntries(slug, id, limit = 50) {
 
 /**
  * HTML'den entry'leri parse eder
- * Format: <li id="entry-123456"><div class="content">...</div></li>
+ * Python scraper'dan ilham alınarak: #pinned-entry .content ve #entry-item-list .content
  */
 function parseEntriesFromHTML(html, limit = 50) {
   const entries = []
   
   try {
-    // Entry'leri bul - farklı formatları dene
-    // Format 1: <li id="entry-XXXXX">
-    // Format 2: <div class="entry-item" data-id="XXXXX">
-    // Format 3: <li class="entry-item">
-    
-    // Önce entry içeren container'ı bul
-    const entryContainerMatch = html.match(/<ul[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/ul>/i) ||
-                                 html.match(/<div[^>]*class=["'][^"']*entry-list["'][^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
-    
-    const searchHtml = entryContainerMatch ? entryContainerMatch[1] : html
-    
-    // Entry pattern'leri - farklı formatları dene
-    const entryPatterns = [
-      /<li[^>]*id=["']entry-(\d+)["'][^>]*>([\s\S]*?)<\/li>/gi,
-      /<li[^>]*data-id=["'](\d+)["'][^>]*>([\s\S]*?)<\/li>/gi,
-      /<div[^>]*class=["'][^"']*entry-item["'][^"']*["'][^>]*data-id=["'](\d+)["'][^>]*>([\s\S]*?)<\/div>/gi
-    ]
-    
-    let entryMatch = null
-    let patternIndex = 0
-    
-    // İlk çalışan pattern'i kullan
-    while (patternIndex < entryPatterns.length && !entryMatch) {
-      entryPatterns[patternIndex].lastIndex = 0 // Reset regex
-      entryMatch = entryPatterns[patternIndex].exec(searchHtml)
-      if (!entryMatch) patternIndex++
-    }
-    
-    // Eğer hiçbir pattern çalışmadıysa, daha agresif parsing yap
-    if (!entryMatch) {
-      // Yöntem 1: <li> elementlerini bul (en yaygın format)
-      // Non-greedy matching kullan ama çok uzun olmasın
-      const liPattern = /<li[^>]*>[\s\S]{0,10000}?<\/li>/gi
-      const liItems = []
-      let liMatch
-      liPattern.lastIndex = 0
-      while ((liMatch = liPattern.exec(html)) !== null && liItems.length < limit * 3) {
-        liItems.push(liMatch[0])
-      }
-      const liWithContent = []
-      
-      for (const li of liItems) {
-        // Content div'i var mı ve author/date var mı kontrol et
-        const hasContent = /<div[^>]*class=["'][^"']*content["'][^"']*["']/i.test(li)
-        const hasAuthor = /entry-author|href=["']\/biri\//i.test(li)
-        const hasDate = /entry-date|permalink|href=["']\/entry\//i.test(li)
-        
-        if (hasContent && (hasAuthor || hasDate)) {
-          liWithContent.push(li)
-        }
-      }
-      
-      if (liWithContent.length > 0) {
-        // Li item'larını orijinal sıraya göre koru (HTML'de göründükleri sırayla)
-        for (let i = 0; i < Math.min(liWithContent.length, limit); i++) {
-          const itemHtml = liWithContent[i]
-          
-          let content = parseEntryContent(itemHtml)
-          const author = parseEntryAuthor(itemHtml)
-          const date = parseEntryDate(itemHtml)
-          const favCount = parseEntryFavCount(itemHtml)
-          const entryId = parseEntryId(itemHtml) || `entry-${i + 1}`
-          
-          if (content && content.trim().length > 3) {
-            entries.push({
-              id: entryId,
-              order: entries.length + 1, // Orijinal sırayı koru
-              content,
-              author: author || 'Bilinmeyen',
-              date: date || null,
-              favoriteCount: favCount,
-              entryUrl: entryId.toString().match(/^\d+$/) ? `https://eksisozluk.com/entry/${entryId}` : null
-            })
-          }
-        }
-        
-        if (entries.length > 0) {
-          // En baştan itibaren göster (zaten sıralı)
-          return entries.slice(0, limit)
-        }
-      }
-      
-      // Yöntem 2: Tüm content div'lerini bul (daha agresif)
-      const contentDivPattern = /<div[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/div>/gi
-      const allContentMatches = []
-      let match
-      let matchCount = 0
-      
-      // Regex'i reset et
-      contentDivPattern.lastIndex = 0
-      
-      while ((match = contentDivPattern.exec(html)) !== null && matchCount < limit * 5) {
-        const startIndex = match.index
-        const endIndex = match.index + match[0].length
-        
-        // Context'i al (öncesi ve sonrası)
-        const contextStart = Math.max(0, startIndex - 3000)
-        const contextEnd = Math.min(html.length, endIndex + 3000)
-        const entryContext = html.substring(contextStart, contextEnd)
-        
-        // Content uzunluğu
-        const contentText = match[1].trim().replace(/<[^>]+>/g, '').replace(/\s+/g, ' ')
-        const contentLength = contentText.length
-        
-        // Entry kriterleri (çok daha esnek)
-        const hasAuthor = /entry-author|href=["']\/biri\//i.test(entryContext)
-        const hasDate = /entry-date|permalink|href=["']\/entry\/\d+/i.test(entryContext)
-        const hasFooter = /entry-footer|feedback-container|entry-info/i.test(entryContext)
-        const hasEntryMeta = /entry-item|entry-index/i.test(entryContext)
-        
-        // Reklam/sponsored kontrolü
-        const isAd = /sponsored|advertisement|doubleclick|adsbygoogle/i.test(entryContext)
-        
-        // Çok basit filtreleme: sadece reklam olmasın ve içerik olsun
-        // Filtreleme kriterlerini ÇOK gevşet - neredeyse her content div'i kabul et
-        if (!isAd && contentLength > 3) {
-          // Hemen hemen her content div'i ekle (çok gevşek filtreleme)
-          // Sadece gerçekten entry olmayanları filtrele (çok kısa veya reklam)
-          allContentMatches.push({
-            contentHtml: match[0],
-            content: match[1],
-            context: entryContext,
-            position: startIndex,
-            score: (hasAuthor ? 10 : 0) + (hasDate ? 8 : 0) + (hasFooter ? 4 : 0) + (hasEntryMeta ? 6 : 0) + (contentLength > 50 ? 2 : 0) + (contentLength > 10 ? 1 : 0)
+    // Python versiyonu gibi: #pinned-entry .content ve #entry-item-list .content selector'larını kullan
+    // Önce pinned entry'yi bul
+    let pinnedEntryMatch = html.match(/<[^>]*id=["']pinned-entry["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+    if (pinnedEntryMatch) {
+      const pinnedHtml = pinnedEntryMatch[1]
+      const pinnedContentMatch = pinnedHtml.match(/<[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+      if (pinnedContentMatch) {
+        const content = cleanEntryText(pinnedContentMatch[1])
+        if (content && content.trim().length > 0) {
+          entries.push({
+            id: 'pinned',
+            order: 0,
+            content,
+            author: parseEntryAuthor(pinnedHtml) || 'Bilinmeyen',
+            date: parseEntryDate(pinnedHtml),
+            favoriteCount: parseEntryFavCount(pinnedHtml),
+            entryUrl: null
           })
         }
-        matchCount++
-      }
-      
-      // Position'a göre sırala (orijinal sırayı koru - en baştan itibaren)
-      // Entry'leri HTML'de göründükleri sırayla göster
-      allContentMatches.sort((a, b) => a.position - b.position)
-      
-      if (allContentMatches.length > 0) {
-        console.log(`Found ${allContentMatches.length} potential entries, processing up to ${limit}`)
-        
-        // Entry'leri parse et
-        for (let i = 0; i < Math.min(allContentMatches.length, limit); i++) {
-          const match = allContentMatches[i]
-          
-          let content = parseEntryContent(match.contentHtml)
-          const author = parseEntryAuthor(match.context)
-          const date = parseEntryDate(match.context)
-          const favCount = parseEntryFavCount(match.context)
-          const entryId = parseEntryId(match.context) || `entry-${i + 1}`
-          
-          // İçerik varsa ekle (minimum 1 karakter - çok gevşek)
-          // Eğer parseEntryContent içerik bulamadıysa, raw HTML'den dene
-          if (!content || content.trim().length < 1) {
-            // Fallback: Raw content text'ten direkt extract et
-            const rawMatch = match.contentHtml.match(/>([^<]{10,})</i)
-            if (rawMatch && rawMatch[1]) {
-              content = rawMatch[1].trim().substring(0, 500) // İlk 500 karakter
-            }
-          }
-          
-          if (content && content.trim().length > 0) {
-            entries.push({
-              id: entryId,
-              order: entries.length + 1,
-              content: content.trim(),
-              author: author || 'Bilinmeyen',
-              date: date || null,
-              favoriteCount: favCount,
-              entryUrl: entryId.toString().match(/^\d+$/) ? `https://eksisozluk.com/entry/${entryId}` : null
-            })
-          }
-        }
-        
-        console.log(`Parsed ${entries.length} entries from ${allContentMatches.length} matches`)
-        
-        if (entries.length > 0) {
-          return entries.slice(0, limit)
-        }
       }
     }
     
-    // Normal pattern matching ile devam et (eğer pattern bulunduysa)
-    if (entryMatch && patternIndex < entryPatterns.length) {
-      entryPatterns[patternIndex].lastIndex = 0 // Reset
+    // Entry list container'ını bul
+    const entryListMatch = html.match(/<[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+    if (!entryListMatch) {
+      return entries.slice(0, limit)
+    }
+    
+    const searchHtml = entryListMatch[1]
+    
+    // Entry item'larını bul: <li id="entry-XXXXX">
+    const entryItemPattern = /<li[^>]*id=["']entry-(\d+)["'][^>]*>([\s\S]*?)<\/li>/gi
+    const foundEntries = []
+    let entryMatch
+    
+    while ((entryMatch = entryItemPattern.exec(searchHtml)) !== null && foundEntries.length < limit + 10) {
+      const entryId = entryMatch[1]
+      const entryHtml = entryMatch[2]
       
-      // Tüm entry'leri önce topla, sonra sırala (orijinal pozisyonlarına göre)
-      const foundEntries = []
-      while ((entryMatch = entryPatterns[patternIndex].exec(searchHtml)) !== null) {
-        const entryId = entryMatch[1]
-        const entryHtml = entryMatch[2]
-        const matchIndex = entryMatch.index // Orijinal pozisyon
-        
-        // Entry içeriğini parse et
-        const content = parseEntryContent(entryHtml)
-        const author = parseEntryAuthor(entryHtml)
-        const date = parseEntryDate(entryHtml)
-        const favCount = parseEntryFavCount(entryHtml)
-        
-        if (content && content.length > 0) {
+      // Entry içindeki .content div'ini bul (Python gibi)
+      const contentMatch = entryHtml.match(/<[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+      if (contentMatch) {
+        const content = cleanEntryText(contentMatch[1])
+        if (content && content.trim().length > 0) {
           foundEntries.push({
             id: entryId,
             content,
-            author: author || 'Bilinmeyen',
-            date: date || null,
-            favoriteCount: favCount,
+            author: parseEntryAuthor(entryHtml) || 'Bilinmeyen',
+            date: parseEntryDate(entryHtml),
+            favoriteCount: parseEntryFavCount(entryHtml),
             entryUrl: `https://eksisozluk.com/entry/${entryId}`,
-            position: matchIndex // Orijinal pozisyonu kaydet
+            position: entryMatch.index
           })
         }
       }
-      
-      // Orijinal pozisyon sırasına göre sırala (en baştan itibaren)
-      foundEntries.sort((a, b) => a.position - b.position)
-      
-      // Order'ı sıraya göre ata
-      foundEntries.forEach((entry, index) => {
-        entries.push({
-          ...entry,
-          order: index + 1
-        })
-      })
     }
     
-    // En baştan itibaren limit kadar döndür
+    // Position'a göre sırala (orijinal sırayı koru)
+    foundEntries.sort((a, b) => a.position - b.position)
+    
+    // Order'ı ata ve entries'e ekle
+    foundEntries.forEach((entry, index) => {
+      entries.push({
+        ...entry,
+        order: entries.length + 1
+      })
+    })
+    
+    // Limit kadar döndür
     return entries.slice(0, limit)
+    
+    // Eski kod - artık kullanılmıyor
+    /*
+    if (false) {
+      // Eski kod - yorum satırı
+    }
+    */
   } catch (error) {
     console.error('Entry parse error:', error)
     return []
@@ -891,14 +747,13 @@ function parseEntriesFromHTML(html, limit = 50) {
 }
 
 /**
- * Entry içeriğini HTML'den çıkarır
+ * Entry text'ini temizler (Python versiyonu gibi)
  */
-function parseEntryContent(html) {
-  const contentMatch = html.match(/<div[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
-  if (!contentMatch) return ''
+function cleanEntryText(htmlContent) {
+  if (!htmlContent) return ''
   
-  let content = contentMatch[1]
-    // HTML tag'lerini temizle
+  // HTML tag'lerini temizle
+  let content = htmlContent
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     // <br>, <p> tag'lerini newline'a çevir
@@ -914,8 +769,10 @@ function parseEntryContent(html) {
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
-    // Fazla boşlukları temizle
-    .replace(/\n\s*\n\s*\n/g, '\n\n')
+    // \r\n'yi \n'ye çevir (Python gibi)
+    .replace(/\r\n?/g, '\n')
+    // Fazla boşlukları temizle (3+ newline'ı 2'ye indir - Python gibi)
+    .replace(/\n{3,}/g, '\n\n')
     .trim()
   
   return content
