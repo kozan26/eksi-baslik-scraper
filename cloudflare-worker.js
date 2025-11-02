@@ -359,7 +359,7 @@ function cleanEntryText(htmlContent) {
  * HTML'den entry'leri parse eder (Python'daki _extract_entries() mantığı)
  * CSS selector: #pinned-entry .content, #entry-item-list .content
  */
-function parseEntriesFromHTML(html, limit = 50) {
+function parseEntriesFromHTML(html, limit = 1000) {
   const entries = []
   
   try {
