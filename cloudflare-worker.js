@@ -663,12 +663,22 @@ function parseEntriesFromHTML(html, limit = 50) {
   const entries = []
   
   try {
-    // Python versiyonu gibi: #pinned-entry .content ve #entry-item-list .content selector'larını kullan
-    // Önce pinned entry'yi bul
-    let pinnedEntryMatch = html.match(/<[^>]*id=["']pinned-entry["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
-    if (pinnedEntryMatch) {
-      const pinnedHtml = pinnedEntryMatch[1]
-      const pinnedContentMatch = pinnedHtml.match(/<[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+    if (!html || html.length < 100) {
+      console.error('HTML too short or empty')
+      return []
+    }
+    
+    // Python mantığı: #pinned-entry .content ve #entry-item-list .content
+    // Daha basit yaklaşım: Tüm HTML'de entry-XXXXX ID'sine sahip li elementlerini bul
+    
+    // 1. Pinned entry (varsa)
+    const pinnedPattern = /<[^>]*\bid=["']pinned-entry["'][^>]*>([\s\S]*?)<\/[^>]+>/i
+    const pinnedMatch = html.match(pinnedPattern)
+    if (pinnedMatch) {
+      const pinnedHtml = pinnedMatch[1]
+      // Pinned entry içinde .content bul
+      const pinnedContentPattern = /<[^>]*\bclass=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i
+      const pinnedContentMatch = pinnedHtml.match(pinnedContentPattern)
       if (pinnedContentMatch) {
         const content = cleanEntryText(pinnedContentMatch[1])
         if (content && content.trim().length > 0) {
@@ -685,40 +695,32 @@ function parseEntriesFromHTML(html, limit = 50) {
       }
     }
     
-    // Entry list container'ını bul - daha esnek regex
-    // Önce <ul id="entry-item-list"> dene, sonra herhangi bir tag
-    let entryListMatch = html.match(/<ul[^>]*id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/ul>/i)
-    if (!entryListMatch) {
-      entryListMatch = html.match(/<[^>]+id=["']entry-item-list["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
-    }
-    
-    // Eğer hala bulamazsa, tüm HTML'de ara
-    const searchHtml = entryListMatch ? entryListMatch[1] : html
-    
-    // Entry item'larını bul: <li id="entry-XXXXX">
-    // Önce entry-item-list içinde, bulamazsa tüm HTML'de
-    const entryItemPattern = /<li[^>]*id=["']entry-(\d+)["'][^>]*>([\s\S]*?)<\/li>/gi
+    // 2. Regular entries: Tüm HTML'de id="entry-XXXXX" olan li elementlerini bul
+    // Non-greedy matching kullan ama makul bir limit koy
+    const entryPattern = /<li[^>]*\bid=["']entry-(\d+)["'][^>]*>([\s\S]{0,50000}?)<\/li>/gi
     const foundEntries = []
+    
     let entryMatch
+    entryPattern.lastIndex = 0 // Reset
     
-    // Reset regex lastIndex
-    entryItemPattern.lastIndex = 0
-    
-    while ((entryMatch = entryItemPattern.exec(searchHtml)) !== null && foundEntries.length < limit + 10) {
+    while ((entryMatch = entryPattern.exec(html)) !== null && foundEntries.length < limit + 20) {
       const entryId = entryMatch[1]
       const entryHtml = entryMatch[2]
       
-      // Entry içindeki .content div'ini bul (Python gibi)
-      // Önce .content class'ını içeren div'i bul
-      let contentMatch = entryHtml.match(/<div[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/div>/i)
+      // Entry içinde .content class'ına sahip elementi bul
+      // Önce div, sonra herhangi bir element
+      let contentPattern = /<div[^>]*\bclass=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/div>/i
+      let contentMatch = entryHtml.match(contentPattern)
+      
       if (!contentMatch) {
-        // Fallback: herhangi bir tag içinde content class'ı
-        contentMatch = entryHtml.match(/<[^>]*class=["'][^"']*content["'][^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i)
+        // Fallback: herhangi bir tag
+        contentPattern = /<[^>]*\bclass=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/i
+        contentMatch = entryHtml.match(contentPattern)
       }
       
       if (contentMatch) {
         const content = cleanEntryText(contentMatch[1])
-        if (content && content.trim().length > 0) {
+        if (content && content.trim().length > 3) { // En az 3 karakter
           foundEntries.push({
             id: entryId,
             content,
@@ -732,16 +734,18 @@ function parseEntriesFromHTML(html, limit = 50) {
       }
     }
     
-    // Position'a göre sırala (orijinal sırayı koru)
+    // Position'a göre sırala (HTML'deki sırayı koru)
     foundEntries.sort((a, b) => a.position - b.position)
     
-    // Order'ı ata ve entries'e ekle
-    foundEntries.forEach((entry, index) => {
+    // Order'ı ata ve ekle
+    foundEntries.forEach((entry) => {
       entries.push({
         ...entry,
-        order: entries.length + 1
+        order: entries.length
       })
     })
+    
+    console.log(`Parsed ${entries.length} entries (${foundEntries.length} found, ${entries.length - foundEntries.length} pinned)`)
     
     // Limit kadar döndür
     return entries.slice(0, limit)
