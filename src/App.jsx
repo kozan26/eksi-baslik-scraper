@@ -45,7 +45,28 @@ function App() {
     } catch (err) {
       console.error('Hata:', err)
       console.error('Worker URL:', WORKER_URL)
-      setError(err.message || 'Gündem yüklenirken bir hata oluştu. Worker URL: ' + WORKER_URL)
+      console.error('Error details:', {
+        name: err.name,
+        message: err.message,
+        stack: err.stack
+      })
+      
+      let errorMessage = err.message || 'Gündem yüklenirken bir hata oluştu'
+      
+      // Network errors için daha açıklayıcı mesaj
+      if (err.message.includes('Failed to fetch') || err.name === 'TypeError') {
+        errorMessage = `Worker'a bağlanılamıyor. Lütfen kontrol edin:
+        
+1. Worker URL doğru mu? (Şu anki: ${WORKER_URL})
+2. Worker deploy edildi mi? Cloudflare Dashboard'da kontrol edin
+3. Worker URL'e browser'dan direkt erişebiliyor musunuz?
+   Test: ${WORKER_URL}/api/gundem
+
+Eğer local development yapıyorsanız: wrangler dev --remote
+Production için: VITE_WORKER_URL environment variable'ını ayarlayın`
+      }
+      
+      setError(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -89,7 +110,13 @@ function App() {
       }
     } catch (err) {
       console.error('Entry loading error:', err)
-      setError(err.message || "Entry'ler yüklenirken bir hata oluştu")
+      let errorMessage = err.message || "Entry'ler yüklenirken bir hata oluştu"
+      
+      if (err.message.includes('Failed to fetch') || err.name === 'TypeError') {
+        errorMessage = `Worker'a bağlanılamıyor. Worker URL: ${WORKER_URL}`
+      }
+      
+      setError(errorMessage)
     } finally {
       setEntriesLoading(false)
     }
@@ -132,7 +159,18 @@ function App() {
       }
     } catch (err) {
       console.error('Scraping error:', err)
-      setScrapeError(err.message || 'Başlık çekilirken bir hata oluştu')
+      let errorMessage = err.message || 'Başlık çekilirken bir hata oluştu'
+      
+      if (err.message.includes('Failed to fetch') || err.name === 'TypeError') {
+        errorMessage = `Worker'a bağlanılamıyor. Worker URL: ${WORKER_URL}
+
+Lütfen:
+1. Worker'ın deploy olduğunu kontrol edin
+2. Worker URL'ini test edin: ${WORKER_URL}/api/gundem
+3. Environment variable'ı kontrol edin: VITE_WORKER_URL`
+      }
+      
+      setScrapeError(errorMessage)
     } finally {
       setScraping(false)
       setScrapeProgress(null)
