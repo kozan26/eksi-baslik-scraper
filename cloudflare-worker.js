@@ -26,7 +26,7 @@ export default {
     }
 
     const url = new URL(request.url)
-
+    
     // Route: /api/scrape-and-summarize - Ana endpoint
     if (url.pathname === '/api/scrape-and-summarize') {
       try {
@@ -73,33 +73,33 @@ export default {
           console.log(`Discovered last page: ${lastPage} for ${baseUrl}`)
         } catch (error) {
           console.error('Error discovering last page:', error)
-          return new Response(JSON.stringify({
+        return new Response(JSON.stringify({
             success: false,
             error: `Failed to discover last page: ${error.message}`
-          }), {
+        }), {
             status: 500,
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'application/json',
-            },
-          })
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        })
         }
 
         try {
           allEntries = await scrapeAllPages(baseUrl, slug, id, lastPage)
           console.log(`Total entries scraped: ${allEntries.length}`)
-        } catch (error) {
+      } catch (error) {
           console.error('Error scraping pages:', error)
-          return new Response(JSON.stringify({
-            success: false,
+        return new Response(JSON.stringify({
+          success: false,
             error: `Failed to scrape entries: ${error.message}`
-          }), {
-            status: 500,
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'application/json',
-            },
-          })
+        }), {
+          status: 500,
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        })
         }
 
         if (allEntries.length === 0) {
@@ -117,7 +117,7 @@ export default {
 
         // Summarize using AI
         const summary = await summarizeEntries(allEntries, env)
-
+        
         return new Response(JSON.stringify({
           success: true,
           topic: {
@@ -155,31 +155,31 @@ export default {
       try {
         const testUrl = url.searchParams.get('url')
         if (!testUrl) {
-          return new Response(JSON.stringify({
+        return new Response(JSON.stringify({
             success: false,
             error: 'URL parameter is required'
           }), {
             status: 400,
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'application/json',
-            },
-          })
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        })
         }
 
         const urlObj = new URL(testUrl)
         const pathMatch = urlObj.pathname.match(/\/([^/]+)--(\d+)/)
         if (!pathMatch) {
-          return new Response(JSON.stringify({
-            success: false,
+        return new Response(JSON.stringify({
+          success: false,
             error: 'Invalid Ekşi Sözlük URL format'
-          }), {
+        }), {
             status: 400,
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'application/json',
-            },
-          })
+          headers: {
+            ...corsHeaders,
+            'Content-Type': 'application/json',
+          },
+        })
         }
 
         const slug = pathMatch[1]
@@ -193,7 +193,7 @@ export default {
         const hasEntryList = /id=["']entry-item-list["']/i.test(html)
         const entryIdMatches = html.match(/id=["']entry-(\d+)["']/gi) || []
         const contentMatches = html.match(/class=["'][^"']*content[^"']*["']/gi) || []
-
+        
         return new Response(JSON.stringify({
           success: true,
           url: baseUrl,
@@ -301,18 +301,18 @@ async function fetchHtml(url) {
         headers: fetchHeaders
       })
 
-      if (!response.ok) {
+    if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)
-      }
+    }
 
-      const html = await response.text()
-      
+    const html = await response.text()
+    
       if (!html || html.length === 0) {
         throw new Error('Empty HTML response')
       }
-
+    
       return html
-    } catch (error) {
+  } catch (error) {
       lastError = error
       console.log(`Fetch attempt ${i + 1}/${RETRIES} failed: ${error.message}`)
       if (i < RETRIES - 1) {
@@ -458,8 +458,8 @@ function parseEntriesFromHTML(html, limit = 50) {
       if (!entryId) {
         entryId = `order-${entryOrder}`
       }
-      
-      // Duplicate kontrolü
+            
+            // Duplicate kontrolü
       const existing = foundEntries.find(e => e.id === entryId)
       if (!existing) {
         foundEntries.push({
@@ -619,6 +619,7 @@ async function discoverLastPage(baseUrl) {
  */
 async function scrapeAllPages(baseUrl, slug, id, lastPage) {
   const allEntries = []
+  const entryIdSet = new Set() // Duplicate entry'leri önlemek için
   const normalizedBase = normalizeBaseUrl(baseUrl)
   
   // Cloudflare Workers subrequest limiti: 50
@@ -633,10 +634,26 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
     try {
       const pageUrl = buildPageUrl(normalizedBase, p)
       const html = await fetchHtml(pageUrl)
-      const entries = parseEntriesFromHTML(html, 1000) // Get all entries from page
+      const entries = parseEntriesFromHTML(html, 1000) // Get all entries from page (no limit per page)
       
       console.log(`Page ${p}: Found ${entries.length} entries`)
-      allEntries.push(...entries)
+      
+      // Duplicate kontrolü yaparak ekle
+      for (const entry of entries) {
+        // Entry ID'si varsa ve daha önce eklenmemişse ekle
+        if (entry.id && !entryIdSet.has(entry.id)) {
+          entryIdSet.add(entry.id)
+          // Order'ı yeniden hesapla (toplam entry sayısı)
+          entry.order = allEntries.length
+          allEntries.push(entry)
+        } else if (!entry.id) {
+          // Entry ID yoksa (order-XXX gibi), direkt ekle (duplicate riski var ama en azından entry'leri kaybetmeyiz)
+          entry.order = allEntries.length
+          allEntries.push(entry)
+        }
+      }
+      
+      console.log(`Page ${p}: Added ${entries.length} entries, total so far: ${allEntries.length}`)
     } catch (error) {
       console.error(`Page ${p} failed: ${error.message}`)
       if (p === 1) {
@@ -652,6 +669,7 @@ async function scrapeAllPages(baseUrl, slug, id, lastPage) {
     console.log(`Warning: Topic has ${lastPage} pages but only scraped first ${MAX_PAGES} pages due to subrequest limit`)
   }
   
+  console.log(`Total unique entries collected: ${allEntries.length}`)
   return allEntries
 }
 
@@ -663,13 +681,14 @@ async function summarizeEntries(entries, env) {
     return 'No entries to summarize.'
   }
   
-  // Entry'leri birleştir (ilk 50 entry'yi al, çok uzun olmasın)
-  const entryTexts = entries.slice(0, 50).map(e => e.content).join('\n\n---\n\n')
+  // Entry'leri birleştir (ilk 100 entry'yi al, çok uzun olmasın)
+  const entryTexts = entries.slice(0, 100).map((e, idx) => `Entry ${idx + 1}:\n${e.content}`).join('\n\n---\n\n')
   
   // AI varsa kullan
   if (env && env.AI) {
     try {
-      const prompt = `Şu Ekşi Sözlük entry'lerini Türkçe olarak özetle. Önemli noktaları ve ana konuları belirt:\n\n${entryTexts.substring(0, 15000)}`
+      console.log('Attempting AI summarization...')
+      const prompt = `Şu Ekşi Sözlük entry'lerini Türkçe olarak özetle. Önemli noktaları, ana konuları ve genel görüşleri belirt. Özet en az 200 kelime olsun:\n\n${entryTexts.substring(0, 15000)}`
       
       const response = await env.AI.run('@cf/meta/llama-3-8b-instruct', {
         messages: [
@@ -678,22 +697,41 @@ async function summarizeEntries(entries, env) {
             content: prompt
           }
         ],
-        max_tokens: 500
+        max_tokens: 1000
       })
+      
+      console.log('AI response received:', response)
       
       if (response && response.response) {
         return response.response
       }
+      
+      // Alternatif response format kontrolü
+      if (response && typeof response === 'string') {
+        return response
+      }
+      
+      if (response && response.choices && response.choices[0] && response.choices[0].message) {
+        return response.choices[0].message.content
+      }
     } catch (error) {
       console.error('AI summarization error:', error)
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        envAI: !!env?.AI
+      })
       // Fallback to simple summary
     }
+  } else {
+    console.log('AI not available, using fallback summary')
   }
   
-  // Fallback: Basit özet
+  // Fallback: Geliştirilmiş özet
   const totalEntries = entries.length
-  const firstEntry = entries[0]?.content || ''
-  const summary = `Toplam ${totalEntries} entry bulundu.\n\nİlk entry:\n${firstEntry.substring(0, 500)}${firstEntry.length > 500 ? '...' : ''}`
+  const sampleEntries = entries.slice(0, 3).map((e, idx) => `${idx + 1}. ${e.content.substring(0, 200)}${e.content.length > 200 ? '...' : ''}`).join('\n\n')
+  
+  const summary = `Toplam ${totalEntries} entry bulundu.\n\nİlk birkaç entry örneği:\n\n${sampleEntries}`
   
   return summary
 }
