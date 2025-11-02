@@ -26,7 +26,22 @@ export default {
     }
 
     const url = new URL(request.url)
-    
+
+    // Route: /api/gundem - Gündem listesi (frontend için)
+    if (url.pathname === '/api/gundem') {
+      return new Response(JSON.stringify({
+        success: true,
+        items: [],
+        message: 'Gündem listesi özelliği devre dışı. Sadece başlık URL\'sinden entry çekme destekleniyor.',
+        timestamp: new Date().toISOString()
+      }), {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'application/json',
+        },
+      })
+    }
+
     // Route: /api/scrape-and-summarize - Ana endpoint
     if (url.pathname === '/api/scrape-and-summarize') {
       try {
