@@ -1,4 +1,4 @@
-name = "eksisozluk-gundem-worker"
+name = "eksi-baslik-scraper"
 main = "cloudflare-worker.js"
 compatibility_date = "2024-01-01"
 
