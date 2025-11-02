@@ -903,30 +903,30 @@ function parseEntriesFromHTML(html, limit = 50) {
     }
     
     // Entry-item-list içindeki tüm .content elementlerini bul (Python'daki gibi direkt)
+    // Python'da entry ID'sine bakmıyor, sadece content'leri sırayla alıyor
     const contentRegex = /<[^>]*class=["'][^"']*\bcontent\b[^"']*["'][^>]*>([\s\S]*?)<\/[^>]+>/gi
     const foundEntries = []
     let contentMatch
     contentRegex.lastIndex = 0
     
+    let entryOrder = 0
     while ((contentMatch = contentRegex.exec(entryListContainer)) !== null && foundEntries.length < limit + 20) {
       const content = cleanEntryText(contentMatch[1])
       if (!content || content.trim().length < 3) {
         continue
       }
       
-      // Bu content'in hangi entry'ye ait olduğunu bul
-      // Content'in önündeki en yakın entry-ID'yi bul
       const contentStart = contentMatch.index
       
-      // Content'in önündeki HTML'i al (container başından content'e kadar)
-      const beforeContent = entryListContainer.substring(0, contentStart)
-      
-      // Önceki entry ID'yi bul (en yakın)
-      const entryIdMatch = beforeContent.match(/id=["']entry-(\d+)["'][^>]*/gi)
+      // Entry ID'yi bul - farklı yöntemler dene
       let entryId = null
+      let entryHtml = ''
+      
+      // Yöntem 1: Content'in önündeki en yakın entry-ID'yi bul
+      const beforeContent = entryListContainer.substring(0, contentStart)
+      const entryIdMatch = beforeContent.match(/id=["']entry-(\d+)["'][^>]*/gi)
       
       if (entryIdMatch && entryIdMatch.length > 0) {
-        // En son eşleşen entry ID'yi al (en yakın)
         const lastMatch = entryIdMatch[entryIdMatch.length - 1]
         const idMatch = lastMatch.match(/entry-(\d+)/)
         if (idMatch) {
@@ -934,9 +934,9 @@ function parseEntriesFromHTML(html, limit = 50) {
         }
       }
       
-      // Eğer önünde entry ID bulamazsa, content'ten sonraki ilk entry ID'yi dene
+      // Yöntem 2: Content'ten sonraki ilk entry ID'yi dene
       if (!entryId) {
-        const afterContent = entryListContainer.substring(contentStart + contentMatch[0].length)
+        const afterContent = entryListContainer.substring(contentStart + contentMatch[0].length, contentStart + contentMatch[0].length + 2000)
         const nextEntryMatch = afterContent.match(/id=["']entry-(\d+)["'][^>]*/i)
         if (nextEntryMatch) {
           const idMatch = nextEntryMatch[0].match(/entry-(\d+)/)
@@ -946,30 +946,54 @@ function parseEntriesFromHTML(html, limit = 50) {
         }
       }
       
-      if (entryId) {
-        // Entry HTML'ini bul (entry ID'den sonraki content'e kadar veya container sonuna kadar)
-        const entryStart = entryListContainer.indexOf(`id="entry-${entryId}"`) 
-        const entryEnd = entryListContainer.indexOf('</li>', entryStart + 100)
-        const entryHtml = entryStart >= 0 
-          ? entryListContainer.substring(Math.max(0, entryStart - 100), entryEnd > 0 ? entryEnd + 5 : entryStart + 5000)
-          : ''
-        
-        // Bu entry ID'yi daha önce ekledik mi kontrol et (duplicate önleme)
-        const existing = foundEntries.find(e => e.id === entryId)
-        if (!existing) {
-          foundEntries.push({
-            id: entryId,
-            content,
-            author: parseEntryAuthor(entryHtml) || 'Bilinmeyen',
-            date: parseEntryDate(entryHtml),
-            favoriteCount: parseEntryFavCount(entryHtml),
-            entryUrl: `https://eksisozluk.com/entry/${entryId}`,
-            position: contentStart
-          })
+      // Yöntem 3: Content'in bulunduğu li/div elementi içinde entry ID ara
+      if (!entryId) {
+        // Content'in başından geriye doğru bir li veya div elementi bul
+        const beforeContentSnippet = entryListContainer.substring(Math.max(0, contentStart - 5000), contentStart)
+        const liMatch = beforeContentSnippet.match(/<li[^>]*id=["']entry-(\d+)["'][^>]*>[\s\S]{0,5000}?<[^>]*class=["'][^"']*\bcontent\b/i)
+        if (liMatch) {
+          entryId = liMatch[1]
+        }
+      }
+      
+      // Entry ID bulunamadıysa, sadece order kullan (Python gibi - entry ID'ye bakmıyor)
+      if (!entryId) {
+        entryId = `order-${entryOrder}`
+        console.log(`Warning: Entry ID not found for content at position ${contentStart}, using order ID`)
+      }
+      
+      // Entry HTML'ini bul (metadata için)
+      if (entryId && entryId.startsWith('entry-')) {
+        const entryIdNum = entryId.replace('entry-', '')
+        const entryStart = entryListContainer.indexOf(`id="entry-${entryIdNum}"`)
+        if (entryStart >= 0) {
+          const entryEnd = entryListContainer.indexOf('</li>', entryStart + 100)
+          entryHtml = entryListContainer.substring(
+            Math.max(0, entryStart - 100), 
+            entryEnd > 0 ? entryEnd + 5 : entryStart + 5000
+          )
         }
       } else {
-        // Entry ID bulunamadı ama content var - sadece content'i ekle
-        console.log('Warning: Content found but no entry ID, skipping')
+        // Entry ID yoksa, content'in etrafındaki HTML'i al
+        entryHtml = entryListContainer.substring(
+          Math.max(0, contentStart - 500), 
+          contentStart + contentMatch[0].length + 500
+        )
+      }
+      
+      // Entry ID ile duplicate kontrolü yap
+      const existing = foundEntries.find(e => e.id === entryId)
+      if (!existing) {
+        foundEntries.push({
+          id: entryId.startsWith('order-') ? entryId : entryId,
+          content,
+          author: parseEntryAuthor(entryHtml) || 'Bilinmeyen',
+          date: parseEntryDate(entryHtml),
+          favoriteCount: parseEntryFavCount(entryHtml),
+          entryUrl: entryId.startsWith('order-') ? null : `https://eksisozluk.com/entry/${entryId}`,
+          position: contentStart
+        })
+        entryOrder++
       }
     }
     
