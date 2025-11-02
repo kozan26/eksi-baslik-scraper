@@ -294,6 +294,9 @@ export default {
 
         const html = await response.text()
         
+        // Check if we got Cloudflare challenge page instead of actual content
+        const isCloudflareChallenge = /cloudflare|challenge|checking your browser/i.test(html) || html.length < 10000
+        
         // Test parsing
         const entries = parseEntriesFromHTML(html, 10)
         
@@ -302,11 +305,22 @@ export default {
         const hasEntryList = /id=["']entry-item-list["']/i.test(html)
         const entryIdMatches = html.match(/id=["']entry-(\d+)["']/gi) || []
         const contentMatches = html.match(/class=["'][^"']*content[^"']*["']/gi) || []
+        
+        // Get entry-item-list snippet
+        const entryListSnippet = html.match(/<[^>]*id=["']entry-item-list["'][^>]*>[\s\S]{0,2000}/i)?.[0] || 'Not found'
+        
+        // Get first entry snippet
+        const firstEntrySnippet = html.match(/<li[^>]*id=["']entry-\d+["'][^>]*>[\s\S]{0,2000}/i)?.[0] || 'Not found'
+        
+        // Check if HTML looks like actual Ekşi Sözlük page
+        const looksLikeEksi = /eksisozluk|entry-item|topic-title/i.test(html)
 
         return new Response(JSON.stringify({
           success: true,
           url: baseUrl,
           htmlLength: html.length,
+          isCloudflareChallenge,
+          looksLikeEksi,
           hasPinnedEntry,
           hasEntryList,
           entryIdCount: entryIdMatches.length,
@@ -315,8 +329,14 @@ export default {
           entries: entries.slice(0, 3), // First 3 entries as sample
           sampleHtml: {
             first1000: html.substring(0, 1000),
-            entryItemListSnippet: html.match(/<ul[^>]*id=["']entry-item-list["'][^>]*>[\s\S]{0,500}/i)?.[0] || 'Not found',
-            firstEntryMatch: html.match(/<li[^>]*id=["']entry-\d+["'][^>]*>[\s\S]{0,500}/i)?.[0] || 'Not found'
+            last1000: html.substring(Math.max(0, html.length - 1000)),
+            entryItemListSnippet: entryListSnippet.substring(0, 2000),
+            firstEntryMatch: firstEntrySnippet.substring(0, 2000),
+            // Try to find where entry-item-list might be
+            searchForEntryList: {
+              ulWithId: html.match(/<ul[^>]*id=["'][^"']*entry[^"']*["'][^>]*>/i)?.[0] || 'Not found',
+              divWithId: html.match(/<div[^>]*id=["'][^"']*entry[^"']*["'][^>]*>/i)?.[0] || 'Not found'
+            }
           }
         }), {
           headers: {
